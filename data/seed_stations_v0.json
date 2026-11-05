@@ -1,0 +1,38 @@
+{
+  "schema_version": "0.1",
+  "status": "DRAFT_REVIEW_PENDING",
+  "data_notice": "FICTIONAL_SIMULATED_DATA_FOR_ACADEMIC_DEMO_ONLY",
+  "provenance": "Coordinates and counts adapted from a supplied proposal. Names are fictional; coordinates approximate and unverified as physical service sites. No manufacturer/operator affiliation or technical compatibility certification.",
+  "battery_families": [
+    {"family_code": "FAM_A", "label": "Fictional family A", "demo_vehicle_id": "VEH_A"},
+    {"family_code": "FAM_B", "label": "Fictional family B", "demo_vehicle_id": "VEH_B"}
+  ],
+  "origins": {
+    "LOC-01": {"lat": 21.0050, "lng": 105.8435},
+    "LOC-02": {"lat": 21.0285, "lng": 105.8542},
+    "LOC-03": {"lat": 21.2, "lng": 105.2}
+  },
+  "demo_user_ids": ["USER-A", "USER-B"],
+  "reservations": [],
+  "drafts": [],
+  "stations": [
+    {"station_id":"ST-01","name":"Vinergy Demo Station 01","area_label":"Hai Ba Trung demo area","coordinates":{"lat":21.0050,"lng":105.8435},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":6,"FAM_B":4},"available_charging_ports_by_family":{"FAM_A":3,"FAM_B":2}},
+    {"station_id":"ST-02","name":"Vinergy Demo Station 02","area_label":"Hai Ba Trung demo area","coordinates":{"lat":20.9958,"lng":105.8675},"opening_status":"OPEN","services":["CHARGING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{},"available_charging_ports_by_family":{"FAM_A":5,"FAM_B":4}},
+    {"station_id":"ST-03","name":"Vinergy Demo Station 03","area_label":"Hai Ba Trung demo area","coordinates":{"lat":21.0115,"lng":105.8492},"opening_status":"OPEN","services":["SWAPPING"],"supported_families":["FAM_A"],"available_batteries_by_family":{"FAM_A":8},"available_charging_ports_by_family":{}},
+    {"station_id":"ST-04","name":"Vinergy Demo Station 04","area_label":"Dong Da demo area","coordinates":{"lat":21.0118,"lng":105.8335},"opening_status":"OPEN","services":["SWAPPING"],"supported_families":["FAM_B"],"available_batteries_by_family":{"FAM_B":5},"available_charging_ports_by_family":{}},
+    {"station_id":"ST-05","name":"Vinergy Demo Station 05","area_label":"Hai Ba Trung demo area","coordinates":{"lat":21.0032,"lng":105.8560},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":0,"FAM_B":3},"available_charging_ports_by_family":{"FAM_A":2,"FAM_B":2}},
+    {"station_id":"ST-06","name":"Vinergy Demo Station 06","area_label":"Dong Da demo area","coordinates":{"lat":21.0075,"lng":105.8278},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":5,"FAM_B":3},"available_charging_ports_by_family":{"FAM_A":2,"FAM_B":1}},
+    {"station_id":"ST-07","name":"Vinergy Demo Station 07","area_label":"Ba Dinh demo area","coordinates":{"lat":21.0185,"lng":105.8152},"opening_status":"OPEN","services":["CHARGING"],"supported_families":["FAM_B"],"available_batteries_by_family":{},"available_charging_ports_by_family":{"FAM_B":4}},
+    {"station_id":"ST-08","name":"Vinergy Demo Station 08","area_label":"Hoan Kiem demo area","coordinates":{"lat":21.0252,"lng":105.8535},"opening_status":"OPEN","services":["SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":7,"FAM_B":4},"available_charging_ports_by_family":{}},
+    {"station_id":"ST-09","name":"Vinergy Demo Station 09","area_label":"Hoan Kiem demo area","coordinates":{"lat":21.0245,"lng":105.8412},"opening_status":"CLOSED","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":4,"FAM_B":2},"available_charging_ports_by_family":{"FAM_A":2,"FAM_B":2}},
+    {"station_id":"ST-10","name":"Vinergy Demo Station 10","area_label":"Ba Dinh demo area","coordinates":{"lat":21.0318,"lng":105.8125},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":6,"FAM_B":5},"available_charging_ports_by_family":{"FAM_A":4,"FAM_B":3}},
+    {"station_id":"ST-11","name":"Vinergy Demo Station 11","area_label":"Cau Giay demo area","coordinates":{"lat":21.0368,"lng":105.7825},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":9,"FAM_B":4},"available_charging_ports_by_family":{"FAM_A":3,"FAM_B":2}},
+    {"station_id":"ST-12","name":"Vinergy Demo Station 12","area_label":"Cau Giay demo area","coordinates":{"lat":21.0310,"lng":105.7838},"opening_status":"OPEN","services":["SWAPPING"],"supported_families":["FAM_B"],"available_batteries_by_family":{"FAM_B":7},"available_charging_ports_by_family":{}},
+    {"station_id":"ST-13","name":"Vinergy Demo Station 13","area_label":"Cau Giay demo area","coordinates":{"lat":21.0082,"lng":105.8015},"opening_status":"MAINTENANCE","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":0,"FAM_B":0},"available_charging_ports_by_family":{"FAM_A":0,"FAM_B":0}},
+    {"station_id":"ST-14","name":"Vinergy Demo Station 14","area_label":"Thanh Xuan demo area","coordinates":{"lat":21.0025,"lng":105.8155},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":5,"FAM_B":5},"available_charging_ports_by_family":{"FAM_A":4,"FAM_B":2}},
+    {"station_id":"ST-15","name":"Vinergy Demo Station 15","area_label":"Thanh Xuan demo area","coordinates":{"lat":20.9885,"lng":105.7950},"opening_status":"OPEN","services":["SWAPPING"],"supported_families":["FAM_A"],"available_batteries_by_family":{"FAM_A":4},"available_charging_ports_by_family":{}},
+    {"station_id":"ST-16","name":"Vinergy Demo Station 16","area_label":"Hoang Mai demo area","coordinates":{"lat":20.9795,"lng":105.8415},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":6,"FAM_B":6},"available_charging_ports_by_family":{"FAM_A":3,"FAM_B":3}},
+    {"station_id":"ST-17","name":"Vinergy Demo Station 17","area_label":"Hoang Mai demo area","coordinates":{"lat":20.9665,"lng":105.8285},"opening_status":"OPEN","services":["CHARGING"],"supported_families":["FAM_A"],"available_batteries_by_family":{},"available_charging_ports_by_family":{"FAM_A":4}},
+    {"station_id":"ST-18","name":"Vinergy Demo Station 18","area_label":"Long Bien demo area","coordinates":{"lat":21.0268,"lng":105.8992},"opening_status":"OPEN","services":["CHARGING","SWAPPING"],"supported_families":["FAM_A","FAM_B"],"available_batteries_by_family":{"FAM_A":8,"FAM_B":6},"available_charging_ports_by_family":{"FAM_A":5,"FAM_B":4}}
+  ]
+}
