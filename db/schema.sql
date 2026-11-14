@@ -1,12 +1,4 @@
--- Vinergy — lược đồ cơ sở dữ liệu v0.1 (BẢN NHÁP, chờ M2/M4 rà soát)
--- Tài liệu thiết kế: docs/design/Database_Design.md
--- DBMS mục tiêu: PostgreSQL 14+. Chỉ dùng cú pháp SQL chuẩn để cũng chạy được trên SQLite
--- (nhớ bật PRAGMA foreign_keys = ON) cho kiểm thử cục bộ.
--- Tệp này chỉ TẠO cấu trúc trên cơ sở dữ liệu trống; không DROP/TRUNCATE (FR-13).
 
--- ---------------------------------------------------------------------------
--- 1. Dữ liệu tham chiếu
--- ---------------------------------------------------------------------------
 
 -- BR-01: chỉ có hai nhóm xe/pin giả lập.
 CREATE TABLE battery_family (
@@ -48,9 +40,6 @@ CREATE TABLE demo_origin (
     CONSTRAINT ck_demo_origin_lng CHECK (lng BETWEEN -180 AND 180)
 );
 
--- ---------------------------------------------------------------------------
--- 2. Trạm và tài nguyên mô phỏng
--- ---------------------------------------------------------------------------
 
 -- station_id cố định dạng 'ST-nn' để thứ tự chuỗi trùng thứ tự số khi khoảng cách bằng nhau (BR-04).
 -- Trên PostgreSQL, sắp xếp bằng ORDER BY ..., station_id COLLATE "C" để kết quả xác định.
@@ -92,10 +81,6 @@ CREATE TABLE station_charging_port (
     CONSTRAINT fk_charging_port_family FOREIGN KEY (family_code) REFERENCES battery_family (family_code),
     CONSTRAINT ck_charging_port_nonneg CHECK (available_ports >= 0)
 );
-
--- ---------------------------------------------------------------------------
--- 3. Vòng đời đặt pin (Sprint 2)
--- ---------------------------------------------------------------------------
 
 -- Bản nháp không giữ tồn kho (BR-06) và bất biến sau khi tạo: đổi trạm/nhóm = tạo bản nháp mới.
 -- Khóa ngoại kép tới station_battery_stock bảo đảm chỉ nháp được ở trạm SWAPPING hỗ trợ đúng nhóm (BR-02).
@@ -157,19 +142,12 @@ CREATE TABLE idempotency_record (
     CONSTRAINT ck_idempotency_operation CHECK (operation IN ('CONFIRM_RESERVATION'))
 );
 
--- ---------------------------------------------------------------------------
--- 4. Chỉ mục
--- ---------------------------------------------------------------------------
 
 CREATE INDEX ix_draft_user ON reservation_draft (user_id);
 CREATE INDEX ix_draft_station_family ON reservation_draft (station_id, family_code);
 CREATE INDEX ix_user_session_user ON user_session (user_id);
 -- Tác vụ nền quét các đơn ACTIVE đã quá hạn (BR-09).
 CREATE INDEX ix_reservation_active_expiry ON reservation (expires_at) WHERE status = 'ACTIVE';
-
--- ---------------------------------------------------------------------------
--- 5. Khung nhìn (dữ liệu suy diễn, không lưu trữ)
--- ---------------------------------------------------------------------------
 
 -- Tương đương các trường services / supported_families / *_by_family của tệp JSON.
 CREATE VIEW v_station_resource AS
