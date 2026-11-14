@@ -10,6 +10,8 @@ An academic web demo for finding charging/swapping stations and reserving one co
 | [Product Backlog](docs/requirements/Product_Backlog.md) | Required stories/enablers for all three sprints, acceptance criteria and actual WBS mapping |
 | [Acceptance Examples and Sample Data](docs/requirements/Acceptance_Examples_and_Sample_Data.md) | 24 proposed acceptance examples, fixture definitions and calculated distance oracles |
 | [Station fixture JSON](data/seed_stations_v0.json) | 18 fictional Hanoi-area records, two fictional families and empty starting orders/drafts; data only, no executable loader |
+| [Database design](docs/design/Database_Design.md) | Draft data requirements, ER entities/relationships, relational schema and normalization (task 1.1.3, review pending) |
+| [Schema](db/schema.sql) / [seed](db/seed.sql) SQL | Draft DDL and insert-only seed generated from the station fixture; no reset tool |
 
 Task 1.1.1 (2–4 Nov 2026) produces these draft inputs for architecture, UI, data and test planning. Review/approval and implementation evidence must be recorded later. The [master plan](../Vinergy_Project_Plan.xlsx) and [detailed plan](../Vinergy_Detail_Plan.xlsx) own scheduling and Story Points; this package does not alter them or introduce work-hour assumptions.
 
