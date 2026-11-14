@@ -1,10 +1,4 @@
-# Vinergy — Thiết kế cơ sở dữ liệu
 
-Phiên bản 0.1. Cập nhật ngày 14 tháng 11 năm 2026. **Bản nháp — đang chờ M2/M4/M7 rà soát.** Thuộc WBS 1.1.3 (EN-101). Nguồn yêu cầu: [SRS](../requirements/SRS.md), [danh sách yêu cầu sản phẩm](../requirements/Product_Backlog.md), [ví dụ nghiệm thu](../requirements/Acceptance_Examples_and_Sample_Data.md) và [seed_stations_v0.json](../../data/seed_stations_v0.json).
-
-Sản phẩm kèm theo: [db/schema.sql](../../db/schema.sql) (lược đồ) và [db/seed.sql](../../db/seed.sql) (18 trạm mẫu). Tài liệu đi theo bốn bước: **Yêu cầu → Mô hình ER → Lược đồ quan hệ → Chuẩn hóa**.
-
-DBMS mục tiêu là PostgreSQL 14+ (đề xuất, chưa được nhóm chốt). Lược đồ chỉ dùng SQL chuẩn nên cũng chạy được trên SQLite. Lược đồ và dữ liệu mẫu **đã được chạy thử trên SQLite 3.40**; **chưa chạy trên PostgreSQL** vì máy soạn thảo không có PostgreSQL.
 
 ## 1. Yêu cầu dữ liệu
 
@@ -41,10 +35,6 @@ DBMS mục tiêu là PostgreSQL 14+ (đề xuất, chưa được nhóm chốt).
 - `quantity` đúng bằng 1 (BR-05).
 - Đơn `CANCELLED` phải có thời điểm hủy **trước** hạn; đơn `EXPIRED` chỉ từ thời điểm hết hạn trở đi (BR-09, AE-16).
 - Chỉ lần chuyển thành công từ `ACTIVE` mới hoàn pin, đúng một lần (BR-09, AE-15).
-
-### 1.4 Ngoài phạm vi thiết kế này
-
-Không lưu nội dung hội thoại, vị trí chính xác của người dùng hay nhật ký (NFR-04; chính sách lưu giữ còn mở). Không có đặt cổng sạc, thanh toán, bàn giao pin thực tế. Không lưu tổng dung lượng pin của trạm vì bộ dữ liệu mẫu không có trường này.
 
 ## 2. Mô hình ER (mức khái niệm)
 
@@ -85,6 +75,7 @@ Ghi chú khi vẽ:
 - Vòng đời `ACTIVE → CANCELLED | EXPIRED` là thuộc tính `status` của RESERVATION, không phải thực thể riêng.
 - DEMO_ORIGIN không có mối quan hệ nào.
 
+ER diagram: https://app.diagrams.net/#G147Q8nPlmETRmFq8c0bAgnnfp3QQhCmQd#%7B%22pageId%22%3A%22aG4sCEwbdC_HGeR1unjR%22%7D 
 ## 3. Lược đồ quan hệ
 
 ### 3.1 Quy tắc ánh xạ đã áp dụng
@@ -269,25 +260,3 @@ Trong JSON, `services` và `supported_families` là hai tập đa trị độc l
 | station_charging_port | 24 | 13 trạm có sạc |
 | reservation_draft, reservation, idempotency_record, user_session | 0 | Trạng thái ban đầu rỗng |
 
-Cách chạy trên cơ sở dữ liệu thử nghiệm **trống**: `psql -d <db_thử_nghiệm> -f db/schema.sql -f db/seed.sql`.
-
-Tệp không xóa hay đặt lại dữ liệu; chạy lần hai sẽ lỗi trùng khóa và không ghi gì. Công cụ đặt lại có bảo vệ theo FR-13/AE-22 là việc của EN-104 (M1), chưa có ở đây.
-
-Đã kiểm tra trên SQLite bằng một kịch bản tạm (không nằm trong kho mã):
-
-- Dựng lại cả 18 bản ghi từ CSDL cho kết quả trùng với JSON, gồm `services` và `supported_families` suy ra từ khung nhìn.
-- AE-01 cho thứ tự ST-01, ST-03, ST-05, ST-06 với 0.0/0.9/1.3/1.7 km; AE-18 chọn ST-03 ở 1.161907 km; AE-02, AE-03, AE-07e, AE-07f cho đúng tập trạm.
-- CSDL từ chối: tồn kho âm, bản nháp tại ST-02 (chỉ sạc) và ST-04/FAM_A (không tương thích), `quantity = 2`, đơn thứ hai trên cùng bản nháp, `CANCELLED` tại/sau hạn, `EXPIRED` trước hạn.
-
-Chưa kiểm tra: hành vi đồng thời thật (AE-11, AE-13, AE-16d) — cần PostgreSQL và mã giao dịch của Sprint 2.
-
-## 6. Điểm cần nhóm rà soát
-
-| Điểm | Lựa chọn trong bản nháp | Người rà soát |
-| --- | --- | --- |
-| DBMS | PostgreSQL 14+ | M2/M4 |
-| Phiên demo | Bảng `user_session` tối thiểu, chờ đặc tả phiên ở 1.1.2 | M2/M4 |
-| “Phiên bản” bản nháp | Bản nháp bất biến; thay đổi trạm/nhóm tạo `draft_id` mới thay cho cột revision. SRS mục 6 ghi “revision/token” nên cần M2 xác nhận | M1/M2 |
-| Phạm vi hỗ trợ nhóm | Lược đồ cho phép một trạm hỗ trợ nhóm khác nhau cho sạc và đổi pin; JSON hiện khai báo `supported_families` chung cho cả trạm. Dữ liệu mẫu thỏa cả hai cách hiểu | M4 |
-| Giới hạn một đơn hoạt động mỗi người | Chưa có ràng buộc, đúng với quyết định còn mở ở mục 8 SRS. Nếu chốt, cần thêm cột chủ sở hữu vào `reservation` để tạo chỉ mục duy nhất bộ phận | M1/M2 |
-| Thời hạn bản nháp/giữ pin | Không có giá trị mặc định trong CSDL; máy chủ truyền `expires_at` | M1/M2/M4 |
