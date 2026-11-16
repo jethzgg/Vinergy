@@ -1,7 +1,7 @@
 -- Vinergy — dữ liệu mẫu ban đầu v0.1 (BẢN NHÁP, chờ M4/M7 rà soát)
 -- Sinh từ data/seed_stations_v0.json (schema_version 0.1). Nếu sửa JSON thì sinh lại tệp này.
 -- DỮ LIỆU MÔ PHỎNG: 18 trạm giả lập khu vực Hà Nội; tên, tọa độ, số lượng không phải địa điểm/thiết bị thật.
--- Chỉ INSERT vào lược đồ trống do db/schema.sql tạo ra. Không xóa/đặt lại dữ liệu (FR-13):
+-- Chỉ INSERT vào lược đồ trống do các migration trong db/migrations tạo ra. Không xóa/đặt lại dữ liệu (FR-13):
 -- chạy lần hai sẽ lỗi trùng khóa chính và giao dịch bị hủy toàn bộ.
 -- Trạng thái ban đầu: không có bản nháp, đơn đặt pin hay phiên nào.
 
