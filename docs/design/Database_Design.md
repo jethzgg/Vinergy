@@ -174,6 +174,23 @@ UPDATE reservation SET status = 'EXPIRED', expired_at = :now
  WHERE reservation_id = :id AND status = 'ACTIVE' AND :now >= expires_at;
 ```
 
+### 3.6 Migration
+
+Lược đồ được quản lý bằng các tệp SQL đánh số trong [db/migrations/](../../db/migrations/), áp dụng theo thứ tự tên tệp trên một cơ sở dữ liệu trống.
+
+| Tệp | Nội dung |
+| --- | --- |
+| [001_initial_schema.sql](../../db/migrations/001_initial_schema.sql) | 10 bảng, 4 chỉ mục, 2 khung nhìn của thiết kế v0 |
+
+Quy ước:
+
+- Tên tệp có dạng `NNN_mo_ta.sql`, với `NNN` là số thứ tự ba chữ số tăng dần.
+- Migration đã được người khác áp dụng thì không sửa nữa; mọi thay đổi lược đồ sau này là một tệp mới (`002_…`).
+- Migration chỉ thay đổi cấu trúc. Dữ liệu mẫu nằm ở `db/seed.sql`, xóa dữ liệu nằm ở `db/reset.sql`.
+- Chỉ có chiều tiến, chưa có tệp hoàn tác. Trên CSDL thử nghiệm, muốn quay lại thì tạo CSDL mới rồi áp dụng lại từ đầu.
+
+Đây là các tệp SQL thuần, chưa gắn với công cụ migration nào. Nếu backend chọn công cụ riêng thì chuyển các tệp này sang định dạng của công cụ đó (chờ M2 chốt).
+
 ## 4. Chuẩn hóa
 
 ### 4.1 Dạng chưa chuẩn hóa (UNF)
@@ -260,3 +277,35 @@ Trong JSON, `services` và `supported_families` là hai tập đa trị độc l
 | station_charging_port | 24 | 13 trạm có sạc |
 | reservation_draft, reservation, idempotency_record, user_session | 0 | Trạng thái ban đầu rỗng |
 
+### 5.1 Kiểm tra dữ liệu mẫu
+
+[db/validate_seed.sql](../../db/validate_seed.sql) là một truy vấn chỉ đọc gồm 38 phép kiểm tra; mọi dòng phải có `result = 'PASS'`.
+
+| Nhóm | Nội dung kiểm tra |
+| --- | --- |
+| Tọa độ (C1–C5) | Vĩ độ/kinh độ trong miền hợp lệ; 18 trạm nằm trong khung minh họa khu vực Hà Nội và không trùng tọa độ; ST-01 trùng LOC-01 |
+| Dịch vụ (S1–S9) | 16 trạm OPEN, ST-09 CLOSED, ST-13 MAINTENANCE; không trạm nào thiếu dịch vụ; 15 trạm đổi pin, 13 trạm sạc; ST-02/ST-07/ST-17 chỉ có sạc |
+| Tương thích (F1–F5) | ST-03/ST-15 chỉ đổi pin nhóm A, ST-04/ST-12 chỉ nhóm B; trạm có cả hai dịch vụ hỗ trợ cùng tập nhóm ở cả hai |
+| Tồn kho (K1–K11) | Không có số lượng âm; tổng 68 pin A, 54 pin B, 66 cổng sạc; ST-05 hỗ trợ A nhưng 0 pin; ST-09 có số lượng dương; ST-13 toàn 0 |
+| Trạng thái rỗng (E1–E4) | Không có bản nháp, đơn, bản ghi chống lặp hay phiên |
+
+Khung tọa độ ở C3 chỉ là phép kiểm tra hợp lý cho dữ liệu mẫu, không phải quy tắc lúc chạy (SRS mục 3).
+
+### 5.2 Đặt lại lặp lại được
+
+[db/reset.sql](../../db/reset.sql) xóa mọi dòng của cả 10 bảng theo thứ tự khóa ngoại trong một giao dịch. Đặt lại = chạy `reset.sql` rồi `seed.sql`;
+
+```
+psql -d <db_thử_nghiệm> -f db/migrations/001_initial_schema.sql -f db/seed.sql   # lần đầu, trên CSDL trống
+psql -d <db_thử_nghiệm> -f db/reset.sql  -f db/seed.sql        # đặt lại sau mỗi ca kiểm thử
+psql -d <db_thử_nghiệm> -f db/validate_seed.sql                # kiểm tra
+```
+
+### 5.3 Kết quả chạy thử
+
+| Môi trường | Cách chạy | Kết quả |
+| --- | --- | --- |
+| PostgreSQL 18, CSDL riêng `vinergy_test` | Chạy thủ công bằng psql ngày 16/11/2026 | `001_initial_schema.sql` (khi đó tên là `schema.sql`, nội dung không đổi) tạo đủ 10 bảng, không lỗi; `validate_seed.sql` đạt 38/38; sau khi làm bẩn dữ liệu, `reset.sql` + `seed.sql` đưa về 38/38 |
+| SQLite 3.40 trong bộ nhớ | `python db/check_seed.py` | 38/38; 18 trạm khớp JSON; ba vòng đặt lại cho trạng thái giống hệt ban đầu |
+
+Chưa kiểm tra hành vi đồng thời (AE-11, AE-13, AE-16d), vì cần mã giao dịch của Sprint 2.
