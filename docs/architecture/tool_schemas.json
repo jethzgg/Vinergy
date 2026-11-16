@@ -1,0 +1,379 @@
+{
+  "schema_version": "1.0",
+  "api_version": "v1",
+  "description": "Sprint 1 LLM tool calling schemas and canonical JSON result schemas for Vinergy (Task 1.1.2 / 1.3.2 spike). Backed by the shared Station Service.",
+  "provider_notes": "Parameter schemas follow JSON Schema Draft 2020-12 as the canonical contract (AD-06). Provider-specific adapters wrap these declarations into SDK formats (e.g. functionDeclarations or type='function') and may strip keywords unsupported by a provider SDK (such as default or exclusiveMinimum), while the server tool adapter always enforces all constraints.",
+  "tools": [
+    {
+      "name": "search_stations",
+      "description": "Search simulated charging or battery-swapping stations around the user's app location, filtered by service_type, vehicle/battery family_code, opening status, and optional radius_km. Sorted by straight-line Haversine distance ascending, then station_id ascending. Coordinates and user identity are injected server-side from trusted app context; NEVER guess or fabricate coordinates, family_code from vehicle brands, stations, or battery stock. If LOCATION_REQUIRED or FAMILY_REQUIRED is returned, ask the user to share/select their location or battery family in the app.",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["service_type"],
+        "properties": {
+          "service_type": {
+            "type": "string",
+            "enum": ["CHARGING", "SWAPPING"],
+            "description": "Requested service type. CHARGING is discovery-only; only SWAPPING stations can later be reserved."
+          },
+          "family_code": {
+            "type": "string",
+            "enum": ["FAM_A", "FAM_B"],
+            "description": "Optional override when the user explicitly states a fictional vehicle/battery family code in the conversation. Omit to use the UI's selected context.family_code. Never infer from real-world vehicle brands."
+          },
+          "only_open": {
+            "type": "boolean",
+            "default": true,
+            "description": "When true (default), exclude CLOSED and MAINTENANCE stations. Set false only when the user explicitly asks to include closed/maintenance stations."
+          },
+          "radius_km": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Optional maximum straight-line distance in km (e.g. remaining battery range). Omit to search all simulated stations without a hidden cap."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_station_detail",
+      "description": "Get simulated details, supported services, compatible battery families, and available stock/ports for a specific station_id. The server injects app location (if available) for distance and context.family_code (if available) for compatibility and booking_eligible checks. Never fabricate station IDs, stock counts, or compatibility.",
+      "parameters": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["station_id"],
+        "properties": {
+          "station_id": {
+            "type": "string",
+            "pattern": "^[A-Z0-9-]{1,32}$",
+            "description": "Unique identifier of the station (e.g. ST-01)."
+          },
+          "family_code": {
+            "type": "string",
+            "enum": ["FAM_A", "FAM_B"],
+            "description": "Optional fictional family code to evaluate compatibility and booking_eligible. Omit to use context.family_code when available."
+          }
+        }
+      }
+    }
+  ],
+  "result_schemas": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+      "ServiceType": {
+        "type": "string",
+        "enum": ["CHARGING", "SWAPPING"]
+      },
+      "FamilyCode": {
+        "type": "string",
+        "enum": ["FAM_A", "FAM_B"]
+      },
+      "OpeningStatus": {
+        "type": "string",
+        "enum": ["OPEN", "CLOSED", "MAINTENANCE"]
+      },
+      "IneligibilityReason": {
+        "type": "string",
+        "enum": [
+          "CHARGING_ONLY",
+          "UNSUPPORTED_FAMILY",
+          "STATION_CLOSED",
+          "STATION_MAINTENANCE",
+          "OUT_OF_STOCK"
+        ]
+      },
+      "ValidationReason": {
+        "type": "string",
+        "enum": [
+          "REQUIRED",
+          "EMPTY",
+          "NOT_A_NUMBER",
+          "OUT_OF_RANGE",
+          "NOT_POSITIVE",
+          "NOT_BOOLEAN",
+          "NOT_IN_ENUM",
+          "INVALID_FORMAT",
+          "TOO_LONG",
+          "DUPLICATE_PARAM",
+          "UNKNOWN_PARAM",
+          "UNKNOWN_FIELD",
+          "MISSING_PAIR"
+        ]
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "reason", "message"],
+        "properties": {
+          "field": { "type": "string", "minLength": 1 },
+          "reason": { "$ref": "#/$defs/ValidationReason" },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error", "request_id"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message", "details"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "INVALID_INPUT",
+                  "SESSION_REQUIRED",
+                  "SESSION_EXPIRED",
+                  "CSRF_INVALID",
+                  "STATION_NOT_FOUND",
+                  "ROUTE_NOT_FOUND",
+                  "UNSUPPORTED_MEDIA_TYPE",
+                  "RATE_LIMITED",
+                  "INTERNAL_ERROR",
+                  "UPSTREAM_UNAVAILABLE",
+                  "UPSTREAM_TIMEOUT"
+                ]
+              },
+              "message": { "type": "string", "minLength": 1 },
+              "details": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/ErrorDetail" }
+              }
+            }
+          },
+          "request_id": { "type": "string", "minLength": 1 },
+          "fallback": { "const": "MANUAL_FORM" }
+        }
+      },
+      "FamilyCountMap": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "FAM_A": { "type": "integer", "minimum": 0 },
+          "FAM_B": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "Station": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "station_id",
+          "name",
+          "area_label",
+          "coordinates",
+          "opening_status",
+          "services",
+          "supported_families",
+          "available_batteries_by_family",
+          "available_charging_ports_by_family",
+          "distance_km",
+          "distance_display",
+          "family_supported",
+          "booking_eligible",
+          "ineligibility_reason"
+        ],
+        "properties": {
+          "station_id": { "type": "string", "pattern": "^[A-Z0-9-]{1,32}$" },
+          "name": { "type": "string", "minLength": 1 },
+          "area_label": { "type": "string", "minLength": 1 },
+          "coordinates": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lat", "lng"],
+            "properties": {
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lng": { "type": "number", "minimum": -180, "maximum": 180 }
+            }
+          },
+          "opening_status": { "$ref": "#/$defs/OpeningStatus" },
+          "services": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/ServiceType" }
+          },
+          "supported_families": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/FamilyCode" }
+          },
+          "available_batteries_by_family": { "$ref": "#/$defs/FamilyCountMap" },
+          "available_charging_ports_by_family": { "$ref": "#/$defs/FamilyCountMap" },
+          "distance_km": { "type": ["number", "null"], "minimum": 0 },
+          "distance_display": { "type": ["string", "null"], "pattern": "^\\d+\\.\\d km$" },
+          "family_supported": { "type": ["boolean", "null"] },
+          "booking_eligible": { "type": ["boolean", "null"] },
+          "ineligibility_reason": {
+            "oneOf": [
+              { "$ref": "#/$defs/IneligibilityReason" },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "SearchStationsData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["is_simulated", "query", "total", "stations"],
+        "properties": {
+          "is_simulated": { "const": true },
+          "query": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lat", "lng", "service_type", "family_code", "only_open", "radius_km"],
+            "properties": {
+              "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+              "lng": { "type": "number", "minimum": -180, "maximum": 180 },
+              "service_type": { "$ref": "#/$defs/ServiceType" },
+              "family_code": { "$ref": "#/$defs/FamilyCode" },
+              "only_open": { "type": "boolean" },
+              "radius_km": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+            }
+          },
+          "total": { "type": "integer", "minimum": 0 },
+          "stations": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Station" }
+          }
+        }
+      },
+      "StationDetailData": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["is_simulated", "query", "station"],
+        "properties": {
+          "is_simulated": { "const": true },
+          "query": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["family_code", "lat", "lng"],
+            "properties": {
+              "family_code": {
+                "oneOf": [
+                  { "$ref": "#/$defs/FamilyCode" },
+                  { "type": "null" }
+                ]
+              },
+              "lat": { "type": ["number", "null"], "minimum": -90, "maximum": 90 },
+              "lng": { "type": ["number", "null"], "minimum": -180, "maximum": 180 }
+            }
+          },
+          "station": { "$ref": "#/$defs/Station" }
+        }
+      },
+      "ToolError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message", "details"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_INPUT",
+              "LOCATION_REQUIRED",
+              "FAMILY_REQUIRED",
+              "STATION_NOT_FOUND",
+              "TOOL_NOT_ALLOWED",
+              "INTERNAL_ERROR"
+            ]
+          },
+          "message": { "type": "string", "minLength": 1 },
+          "details": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/ErrorDetail" }
+          }
+        }
+      },
+      "ToolResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok", "data"],
+            "properties": {
+              "ok": { "const": true },
+              "data": {
+                "oneOf": [
+                  { "$ref": "#/$defs/SearchStationsData" },
+                  { "$ref": "#/$defs/StationDetailData" }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ok", "error"],
+            "properties": {
+              "ok": { "const": false },
+              "error": { "$ref": "#/$defs/ToolError" }
+            }
+          }
+        ]
+      },
+      "DemoSessionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session", "csrf_token"],
+        "properties": {
+          "session": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["demo_user", "expires_at"],
+            "properties": {
+              "demo_user": { "type": "string", "enum": ["USER-A", "USER-B"] },
+              "expires_at": { "type": "string", "format": "date-time" }
+            }
+          },
+          "csrf_token": { "type": "string", "minLength": 1 }
+        }
+      },
+      "ChatResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reply", "tool_results", "fallback"],
+        "properties": {
+          "reply": { "type": "string", "minLength": 1 },
+          "tool_results": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tool", "ok", "data"],
+                  "properties": {
+                    "tool": { "type": "string", "enum": ["search_stations", "get_station_detail"] },
+                    "ok": { "const": true },
+                    "data": {
+                      "oneOf": [
+                        { "$ref": "#/$defs/SearchStationsData" },
+                        { "$ref": "#/$defs/StationDetailData" }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tool", "ok", "error"],
+                  "properties": {
+                    "tool": { "type": "string" },
+                    "ok": { "const": false },
+                    "error": { "$ref": "#/$defs/ToolError" }
+                  }
+                }
+              ]
+            }
+          },
+          "fallback": { "enum": ["MANUAL_FORM", null] }
+        }
+      }
+    }
+  }
+}
