@@ -27,3 +27,40 @@ Task 1.1.1 (2–4 Nov 2026) produces these draft inputs for architecture, UI, da
 Sprint 1 (2–15 Nov) delivers discovery and an LLM tool spike; Sprint 2 (16–29 Nov) the form reservation lifecycle; Sprint 3 (30 Nov–13 Dec) full bounded chat and the frozen release. **17 Dec 2026 is one presentation session**, with no new development week.
 
 The requirements are written in English; Vietnamese sample utterances represent the intended demo conversations.
+
+## Quickstart (Local Setup & Tests)
+
+> Task 1.3.1 runnable skeleton. Credentials and API keys must never be committed to source control.
+
+1. **Environment configuration**
+   ```bash
+   cp .env.example .env
+   ```
+   Fill in local values if needed (leave secrets out of Git).
+
+2. **Database seed & reset verification (SQLite, Python 3.8+)**
+   ```bash
+   python db/check_seed.py
+   ```
+
+3. **Backend (FastAPI)**
+   ```bash
+   cd backend
+   python -m venv .venv
+   # Windows PowerShell: .venv\Scripts\Activate.ps1
+   # macOS/Linux: source .venv/bin/activate
+   pip install -r requirements.txt
+   python -m pytest -v
+   uvicorn app.main:app --reload
+   ```
+   Health check: `http://127.0.0.1:8000/health`
+
+4. **Frontend (React + Vite)**
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   npm run dev
+   ```
+   Dev server: `http://localhost:5173`
+
