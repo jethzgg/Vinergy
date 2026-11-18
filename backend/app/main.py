@@ -1,12 +1,14 @@
-"""Minimal runnable FastAPI skeleton for Vinergy (Task 1.3.1)."""
+"""Runnable FastAPI skeleton for Vinergy (Tasks 1.3.1 & 1.3.2)."""
 
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.llm.spike_router import router as spike_router
+
 app = FastAPI(
     title="Vinergy API",
-    version="0.1.0",
+    version="0.2.0",
     description="Academic demo API for charging/swapping station discovery and battery reservation.",
 )
 
@@ -18,6 +20,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Spike router (Task 1.3.2) ---
+app.include_router(spike_router)
 
 
 @app.get("/health", tags=["health"])
