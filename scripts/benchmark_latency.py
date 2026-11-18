@@ -11,13 +11,16 @@ Calculates median and p95 percentiles across multiple sample iterations.
 
 from __future__ import annotations
 
+import math
 import os
+import statistics
 import sys
 import time
-import numpy as np
 
 # Ensure backend package is in path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
 from app.core.config import get_settings
 from app.llm.orchestrator import LLMOrchestrator
@@ -72,13 +75,24 @@ def run_benchmark(iterations: int = 30):
         llm_times.append(m.llm_total_ms)
         tool_times.append(m.tool_total_ms)
 
-    def stats(arr):
+    def stats(arr: list[float]) -> dict[str, float]:
+        if not arr:
+            return {"min": 0.0, "max": 0.0, "median": 0.0, "p95": 0.0, "mean": 0.0}
+        sorted_arr = sorted(arr)
+        # Compute 95th percentile
+        k = (len(sorted_arr) - 1) * 0.95
+        f = math.floor(k)
+        c = math.ceil(k)
+        if f == c:
+            p95 = sorted_arr[int(k)]
+        else:
+            p95 = sorted_arr[f] * (c - k) + sorted_arr[c] * (k - f)
         return {
-            "min": np.min(arr),
-            "max": np.max(arr),
-            "median": np.median(arr),
-            "p95": np.percentile(arr, 95),
-            "mean": np.mean(arr),
+            "min": min(sorted_arr),
+            "max": max(sorted_arr),
+            "median": statistics.median(sorted_arr),
+            "p95": p95,
+            "mean": statistics.mean(sorted_arr),
         }
 
     s_total = stats(total_times)

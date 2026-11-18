@@ -57,10 +57,11 @@ class GoogleGenAIProvider(BaseLLMProvider):
 
         self._genai = genai
         self._types = types
-        self._client = genai.Client(api_key=api_key)
         self._model = model
         self._timeout_ms = timeout_ms
-        logger.info("GoogleGenAIProvider initialized (model=%s)", model)
+        self._http_options = types.HttpOptions(timeout=timeout_ms)
+        self._client = genai.Client(api_key=api_key, http_options=self._http_options)
+        logger.info("GoogleGenAIProvider initialized (model=%s, timeout=%dms)", model, timeout_ms)
 
     def _build_tools(self, tools: list[dict[str, Any]]) -> list:
         """Convert canonical tool specs to google-genai function declarations."""
@@ -148,13 +149,17 @@ class GoogleGenAIProvider(BaseLLMProvider):
                     system_instruction=system_prompt,
                     tools=genai_tools,
                     temperature=0.1,
+                    http_options=self._http_options,
                 ),
             )
         except Exception as exc:
-            logger.error("Gemini API error: %s", exc)
+            err_str = str(exc).lower()
+            is_timeout = "timeout" in err_str or "timed out" in err_str or "deadline" in err_str
+            finish_reason = "TIMEOUT" if is_timeout else "ERROR"
+            logger.error("Gemini API %s: %s", finish_reason, exc)
             return LLMResponse(
                 text=None,
-                finish_reason="ERROR",
+                finish_reason=finish_reason,
                 raw=str(exc),
             )
 

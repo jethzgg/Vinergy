@@ -11,6 +11,8 @@ Responsibilities (architecture.md §3, api_contracts §5):
 from __future__ import annotations
 
 import logging
+import math
+import re
 from typing import Any
 
 from app.llm.schemas import load_tool_schemas
@@ -47,28 +49,33 @@ def _validate_search_params(args: dict[str, Any]) -> list[dict]:
     """Validate search_stations tool parameters. Returns list of error details."""
     errors: list[dict] = []
 
-    # service_type — required, enum
+    # service_type — required, enum string
     st = args.get("service_type")
     if st is None:
         errors.append(_make_detail("service_type", "REQUIRED", "service_type is required."))
+    elif not isinstance(st, str):
+        errors.append(_make_detail("service_type", "INVALID_FORMAT", "service_type must be a string."))
     elif st not in _SERVICE_TYPES:
         errors.append(_make_detail("service_type", "NOT_IN_ENUM", f"service_type must be one of {sorted(_SERVICE_TYPES)}."))
 
-    # family_code — optional, enum (may come from context)
+    # family_code — optional, enum string (may come from context)
     fc = args.get("family_code")
-    if fc is not None and fc not in _FAMILY_CODES:
-        errors.append(_make_detail("family_code", "NOT_IN_ENUM", f"family_code must be one of {sorted(_FAMILY_CODES)}."))
+    if fc is not None:
+        if not isinstance(fc, str):
+            errors.append(_make_detail("family_code", "INVALID_FORMAT", "family_code must be a string."))
+        elif fc not in _FAMILY_CODES:
+            errors.append(_make_detail("family_code", "NOT_IN_ENUM", f"family_code must be one of {sorted(_FAMILY_CODES)}."))
 
     # only_open — optional, boolean
     oo = args.get("only_open")
     if oo is not None and not isinstance(oo, bool):
         errors.append(_make_detail("only_open", "NOT_BOOLEAN", "only_open must be a boolean."))
 
-    # radius_km — optional, positive number
+    # radius_km — optional, positive finite number (strictly not boolean)
     rk = args.get("radius_km")
     if rk is not None:
-        if not isinstance(rk, (int, float)):
-            errors.append(_make_detail("radius_km", "NOT_A_NUMBER", "radius_km must be a number."))
+        if isinstance(rk, bool) or not isinstance(rk, (int, float)) or not math.isfinite(rk):
+            errors.append(_make_detail("radius_km", "NOT_A_NUMBER", "radius_km must be a finite number."))
         elif rk <= 0:
             errors.append(_make_detail("radius_km", "NOT_POSITIVE", "radius_km must be greater than 0."))
 
@@ -88,12 +95,15 @@ def _validate_detail_params(args: dict[str, Any]) -> list[dict]:
     sid = args.get("station_id")
     if sid is None:
         errors.append(_make_detail("station_id", "REQUIRED", "station_id is required."))
-    elif not isinstance(sid, str):
-        errors.append(_make_detail("station_id", "INVALID_FORMAT", "station_id must be a string."))
+    elif not isinstance(sid, str) or not re.match(r"^[A-Z0-9-]{1,32}$", sid):
+        errors.append(_make_detail("station_id", "INVALID_FORMAT", "station_id must be a string matching ^[A-Z0-9-]{1,32}$."))
 
     fc = args.get("family_code")
-    if fc is not None and fc not in _FAMILY_CODES:
-        errors.append(_make_detail("family_code", "NOT_IN_ENUM", f"family_code must be one of {sorted(_FAMILY_CODES)}."))
+    if fc is not None:
+        if not isinstance(fc, str):
+            errors.append(_make_detail("family_code", "INVALID_FORMAT", "family_code must be a string."))
+        elif fc not in _FAMILY_CODES:
+            errors.append(_make_detail("family_code", "NOT_IN_ENUM", f"family_code must be one of {sorted(_FAMILY_CODES)}."))
 
     known = {"station_id", "family_code"}
     for key in args:
@@ -132,6 +142,14 @@ def execute_tool(
         return _make_error(
             "TOOL_NOT_ALLOWED",
             f"Tool '{tool_name}' is not in the allowed tool list.",
+        )
+
+    # 1b. Check argument container type
+    if not isinstance(tool_args, dict):
+        return _make_error(
+            "INVALID_INPUT",
+            "Tool arguments must be a JSON object.",
+            [_make_detail("parameters", "INVALID_FORMAT", "Expected a dictionary of parameters.")],
         )
 
     # 2. Dispatch by tool name

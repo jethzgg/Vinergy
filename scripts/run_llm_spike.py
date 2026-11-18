@@ -16,8 +16,10 @@ import json
 import sys
 import os
 
-# Ensure the backend package is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ensure the backend directory is in sys.path so `app` can be imported
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
 from app.core.config import get_settings
 from app.llm.orchestrator import LLMOrchestrator

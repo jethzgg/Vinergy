@@ -59,6 +59,23 @@ def _build_system_prompt(context: dict[str, Any]) -> str:
     )
 
 
+def sanitize_tool_result_for_llm(tool_result: dict[str, Any]) -> dict[str, Any]:
+    """Create a sanitized copy of tool_result for LLM history (AD-05, NFR-04).
+
+    Removes user coordinates (lat/lng) from data.query so the LLM provider
+    never receives user location details across multi-round conversations.
+    The full unsanitized tool_result is preserved for app/client consumption.
+    """
+    import copy
+    sanitized = copy.deepcopy(tool_result)
+    if sanitized.get("ok") and isinstance(sanitized.get("data"), dict):
+        data = sanitized["data"]
+        if "query" in data and isinstance(data["query"], dict):
+            data["query"].pop("lat", None)
+            data["query"].pop("lng", None)
+    return sanitized
+
+
 # ---------------------------------------------------------------------------
 # Latency tracking
 # ---------------------------------------------------------------------------
@@ -180,12 +197,13 @@ class LLMOrchestrator:
             llm_elapsed = (time.perf_counter() - llm_start) * 1000
             metrics.llm_durations_ms.append(llm_elapsed)
 
-            # --- Handle ERROR finish ---
-            if response.finish_reason == "ERROR":
-                logger.warning("LLM returned ERROR: %s", response.raw)
+            # --- Handle ERROR or TIMEOUT finish ---
+            if response.finish_reason in ("ERROR", "TIMEOUT"):
+                logger.warning("LLM returned %s: %s", response.finish_reason, response.raw)
                 metrics.total_ms = (time.perf_counter() - total_start) * 1000
                 return OrchestratorResult(
-                    reply="Xin lỗi, hệ thống gặp lỗi. Vui lòng thử lại hoặc sử dụng form tìm kiếm thủ công.",
+                    reply="Xin lỗi, hệ thống gặp sự cố khi kết nối nhà cung cấp AI. "
+                          "Vui lòng thử lại hoặc sử dụng form tìm kiếm thủ công.",
                     tool_results=all_tool_results,
                     fallback="MANUAL_FORM",
                     metrics=metrics,
@@ -233,11 +251,11 @@ class LLMOrchestrator:
                 result_entry = {"tool": tc.name, **tool_result}
                 all_tool_results.append(result_entry)
 
-                # Feed result back to LLM
+                # Feed sanitized result back to LLM (AD-05, NFR-04: no user coords)
                 messages.append({
                     "role": "tool",
                     "tool_name": tc.name,
-                    "content": tool_result,
+                    "content": sanitize_tool_result_for_llm(tool_result),
                 })
 
         metrics.total_ms = (time.perf_counter() - total_start) * 1000

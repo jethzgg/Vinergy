@@ -6,15 +6,59 @@ It will be superseded by the full POST /api/v1/chat in Sprint 3.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+import threading
+import time
+import uuid
 from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.llm.orchestrator import LLMOrchestrator
 from app.llm.providers.mock_provider import MockLLMProvider
 
 router = APIRouter(prefix="/api/v1/spike", tags=["spike"])
+
+
+# ---------------------------------------------------------------------------
+# In-memory Rate Limiter (api_contracts §2.2, §5.5)
+# ---------------------------------------------------------------------------
+
+class InMemoryRateLimiter:
+    """Sliding-window rate limiter per client key."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._requests: dict[str, list[float]] = {}
+
+    def is_allowed(
+        self, client_key: str, max_requests: int, window_seconds: float = 60.0
+    ) -> tuple[bool, int]:
+        """Check if request is allowed. Returns (allowed, retry_after_seconds)."""
+        now = time.time()
+        with self._lock:
+            history = self._requests.setdefault(client_key, [])
+            cutoff = now - window_seconds
+            history = [ts for ts in history if ts > cutoff]
+            self._requests[client_key] = history
+
+            if len(history) >= max_requests:
+                oldest = history[0]
+                retry_after = max(1, int(window_seconds - (now - oldest)) + 1)
+                return False, retry_after
+
+            history.append(now)
+            return True, 0
+
+    def reset(self) -> None:
+        """Reset rate limiter state (useful for test isolation)."""
+        with self._lock:
+            self._requests.clear()
+
+
+rate_limiter = InMemoryRateLimiter()
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +115,39 @@ def _create_provider():
 # ---------------------------------------------------------------------------
 
 @router.post("/llm-chat", response_model=SpikeChatResponse)
-def spike_llm_chat(req: SpikeChatRequest) -> SpikeChatResponse:
+def spike_llm_chat(req: SpikeChatRequest, request: Request):
     """Spike endpoint to test LLM tool calling.
 
+    Enforces rate limits (LLM_RATE_LIMIT_PER_MINUTE) returning 429 RATE_LIMITED.
     Accepts a user message and optional app context (location, family_code).
     Returns the LLM reply, tool execution results, fallback flag, and metrics.
     """
+    settings = get_settings()
+    max_rpm = settings.llm_rate_limit_per_minute
+
+    client_key = request.client.host if request.client else "127.0.0.1"
+    allowed, retry_after = rate_limiter.is_allowed(
+        client_key, max_requests=max_rpm, window_seconds=60.0
+    )
+    if not allowed:
+        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
+        return JSONResponse(
+            status_code=429,
+            headers={
+                "Retry-After": str(retry_after),
+                "X-Request-Id": req_id,
+            },
+            content={
+                "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "Quá giới hạn số lượt yêu cầu. Vui lòng thử lại sau.",
+                    "details": [],
+                },
+                "request_id": req_id,
+                "fallback": "MANUAL_FORM",
+            },
+        )
+
     provider = _create_provider()
     orchestrator = LLMOrchestrator(provider)
 
