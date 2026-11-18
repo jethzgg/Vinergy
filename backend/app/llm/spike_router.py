@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -110,28 +110,54 @@ def _create_provider():
         return MockLLMProvider()
 
 
+def _resolve_session_id(request: Request) -> tuple[str, bool]:
+    """Resolve session identifier for rate limiting (api_contracts §2.2, §3, §5.5).
+
+    Resolves:
+    1. Cookie `vinergy_sid` (canonical session cookie)
+    2. Header `X-Session-Id` or `Session-Id`
+    3. If neither is present, generates a fresh unique session id and sets cookie,
+       ensuring separate clients on the same Wi-Fi IP don't share rate limits.
+
+    Returns:
+        (session_id, is_new_session)
+    """
+    sid = request.cookies.get("vinergy_sid")
+    if sid:
+        return sid, False
+
+    header_sid = request.headers.get("X-Session-Id") or request.headers.get("Session-Id")
+    if header_sid:
+        return header_sid, False
+
+    new_sid = f"sid_{uuid.uuid4().hex}"
+    return new_sid, True
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 
 @router.post("/llm-chat", response_model=SpikeChatResponse)
-def spike_llm_chat(req: SpikeChatRequest, request: Request):
+def spike_llm_chat(req: SpikeChatRequest, request: Request, response: Response):
     """Spike endpoint to test LLM tool calling.
 
-    Enforces rate limits (LLM_RATE_LIMIT_PER_MINUTE) returning 429 RATE_LIMITED.
+    Enforces session-based rate limits (LLM_RATE_LIMIT_PER_MINUTE) returning 429 RATE_LIMITED.
+    Returns 503 UPSTREAM_UNAVAILABLE or 504 UPSTREAM_TIMEOUT if provider fails (AE-21, §2.2, §5.6).
     Accepts a user message and optional app context (location, family_code).
     Returns the LLM reply, tool execution results, fallback flag, and metrics.
     """
     settings = get_settings()
     max_rpm = settings.llm_rate_limit_per_minute
 
-    client_key = request.client.host if request.client else "127.0.0.1"
+    # Identify session (isolated per session, not per shared Wi-Fi IP)
+    session_id, is_new_session = _resolve_session_id(request)
     allowed, retry_after = rate_limiter.is_allowed(
-        client_key, max_requests=max_rpm, window_seconds=60.0
+        session_id, max_requests=max_rpm, window_seconds=60.0
     )
     if not allowed:
         req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
-        return JSONResponse(
+        err_resp = JSONResponse(
             status_code=429,
             headers={
                 "Retry-After": str(retry_after),
@@ -147,6 +173,9 @@ def spike_llm_chat(req: SpikeChatRequest, request: Request):
                 "fallback": "MANUAL_FORM",
             },
         )
+        if is_new_session:
+            err_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
+        return err_resp
 
     provider = _create_provider()
     orchestrator = LLMOrchestrator(provider)
@@ -161,6 +190,48 @@ def spike_llm_chat(req: SpikeChatRequest, request: Request):
         context["family_code"] = req.context.family_code
 
     result = orchestrator.handle(message=req.message, context=context)
+
+    # Handle upstream provider errors per api_contracts §2.2, §5.5, §5.6
+    if result.upstream_error == "UPSTREAM_TIMEOUT":
+        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
+        timeout_resp = JSONResponse(
+            status_code=504,
+            headers={"X-Request-Id": req_id},
+            content={
+                "error": {
+                    "code": "UPSTREAM_TIMEOUT",
+                    "message": result.upstream_message or "Không nhận được phản hồi từ nhà cung cấp LLM trong thời gian cho phép.",
+                    "details": [],
+                },
+                "request_id": req_id,
+                "fallback": "MANUAL_FORM",
+            },
+        )
+        if is_new_session:
+            timeout_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
+        return timeout_resp
+
+    if result.upstream_error == "UPSTREAM_UNAVAILABLE":
+        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
+        unavail_resp = JSONResponse(
+            status_code=503,
+            headers={"X-Request-Id": req_id},
+            content={
+                "error": {
+                    "code": "UPSTREAM_UNAVAILABLE",
+                    "message": result.upstream_message or "Không thể kết nối hoặc nhà cung cấp LLM trả về lỗi.",
+                    "details": [],
+                },
+                "request_id": req_id,
+                "fallback": "MANUAL_FORM",
+            },
+        )
+        if is_new_session:
+            unavail_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
+        return unavail_resp
+
+    if is_new_session:
+        response.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
 
     return SpikeChatResponse(
         reply=result.reply,

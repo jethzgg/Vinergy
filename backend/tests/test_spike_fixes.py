@@ -197,11 +197,11 @@ def test_tool_args_not_a_dict():
 
 
 # ===========================================================================
-# 4. Test [P2]: Rate limiting on POST /api/v1/spike/llm-chat
+# 4. Test [P2]: Rate limiting per session & HTTP 503/504 error envelopes
 # ===========================================================================
 
 def test_rate_limiter_enforcement():
-    """Verify the 11th consecutive request gets 429 RATE_LIMITED with Retry-After."""
+    """Verify the 11th consecutive request in a session gets 429 RATE_LIMITED with Retry-After."""
     client = TestClient(app)
     rate_limiter.reset()
 
@@ -216,13 +216,14 @@ def test_rate_limiter_enforcement():
         },
     }
 
-    # First 10 requests should succeed (200 OK)
+    # First 10 requests under session-1 should succeed (200 OK)
+    headers = {"X-Session-Id": "test-session-rate-limit"}
     for i in range(max_rpm):
-        res = client.post("/api/v1/spike/llm-chat", json=payload)
+        res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers)
         assert res.status_code == 200, f"Request {i+1} failed with {res.status_code}"
 
-    # 11th request must return 429 Too Many Requests
-    blocked_res = client.post("/api/v1/spike/llm-chat", json=payload)
+    # 11th request under the same session must return 429 Too Many Requests
+    blocked_res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers)
     assert blocked_res.status_code == 429
     assert "Retry-After" in blocked_res.headers
     assert int(blocked_res.headers["Retry-After"]) >= 1
@@ -234,3 +235,83 @@ def test_rate_limiter_enforcement():
 
     # Clean up rate limiter for other tests
     rate_limiter.reset()
+
+
+def test_separate_sessions_on_same_ip_do_not_share_rate_limit():
+    """Verify two users on the same IP (e.g. demo Wi-Fi) have independent quotas."""
+    client = TestClient(app)
+    rate_limiter.reset()
+
+    settings = get_settings()
+    max_rpm = settings.llm_rate_limit_per_minute
+
+    payload = {
+        "message": "Tìm trạm đổi pin",
+        "context": {
+            "location": {"lat": 21.005, "lng": 105.8435},
+            "family_code": "FAM_A",
+        },
+    }
+
+    # User A consumes all quota (10 requests)
+    headers_a = {"X-Session-Id": "user-a-on-wifi"}
+    for _ in range(max_rpm):
+        res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_a)
+        assert res.status_code == 200
+
+    # User A gets blocked on 11th call
+    res_a_blocked = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_a)
+    assert res_a_blocked.status_code == 429
+
+    # User B on the EXACT same IP/client with their own session MUST still succeed (200 OK)
+    headers_b = {"X-Session-Id": "user-b-on-same-wifi"}
+    res_b = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_b)
+    assert res_b.status_code == 200, "User B was wrongly rate-limited by User A's usage on the same IP!"
+
+    rate_limiter.reset()
+
+
+def test_endpoint_returns_503_on_upstream_unavailable(monkeypatch):
+    """Verify endpoint returns HTTP 503 UPSTREAM_UNAVAILABLE with error envelope."""
+    client = TestClient(app)
+
+    class UnavailableProvider(MockLLMProvider):
+        def send_message(self, **kwargs):
+            raise ConnectionError("Connection refused to AI provider")
+
+    monkeypatch.setattr("app.llm.spike_router._create_provider", lambda: UnavailableProvider())
+
+    res = client.post(
+        "/api/v1/spike/llm-chat",
+        json={"message": "Tìm trạm đổi pin", "context": {}},
+    )
+    assert res.status_code == 503
+    body = res.json()
+    assert body["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+    assert body["fallback"] == "MANUAL_FORM"
+    assert "request_id" in body
+
+
+def test_endpoint_returns_504_on_upstream_timeout(monkeypatch):
+    """Verify endpoint returns HTTP 504 UPSTREAM_TIMEOUT with error envelope."""
+    client = TestClient(app)
+
+    class TimeoutProvider(MockLLMProvider):
+        def send_message(self, **kwargs):
+            return LLMResponse(
+                text=None,
+                finish_reason="TIMEOUT",
+                raw="Request timed out after 15000ms",
+            )
+
+    monkeypatch.setattr("app.llm.spike_router._create_provider", lambda: TimeoutProvider())
+
+    res = client.post(
+        "/api/v1/spike/llm-chat",
+        json={"message": "Tìm trạm đổi pin", "context": {}},
+    )
+    assert res.status_code == 504
+    body = res.json()
+    assert body["error"]["code"] == "UPSTREAM_TIMEOUT"
+    assert body["fallback"] == "MANUAL_FORM"
+    assert "request_id" in body

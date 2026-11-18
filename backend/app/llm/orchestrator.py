@@ -118,6 +118,8 @@ class OrchestratorResult:
     tool_results: list[dict[str, Any]]
     fallback: str | None
     metrics: LatencyMetrics
+    upstream_error: str | None = None  # UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT | None
+    upstream_message: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -187,12 +189,22 @@ class LLMOrchestrator:
                 logger.error("LLM provider error (round %d): %s", round_num, exc)
                 metrics.llm_durations_ms.append((time.perf_counter() - llm_start) * 1000)
                 metrics.total_ms = (time.perf_counter() - total_start) * 1000
+                err_str = str(exc).lower()
+                is_timeout = "timeout" in err_str or "timed out" in err_str or "deadline" in err_str
+                upstream_error = "UPSTREAM_TIMEOUT" if is_timeout else "UPSTREAM_UNAVAILABLE"
+                msg = (
+                    "Không nhận được phản hồi từ nhà cung cấp LLM trong thời gian cho phép."
+                    if is_timeout
+                    else "Không thể kết nối hoặc nhà cung cấp LLM trả về lỗi."
+                )
                 return OrchestratorResult(
                     reply="Xin lỗi, hệ thống gặp lỗi khi kết nối nhà cung cấp AI. "
                           "Vui lòng thử lại hoặc sử dụng form tìm kiếm thủ công.",
                     tool_results=all_tool_results,
                     fallback="MANUAL_FORM",
                     metrics=metrics,
+                    upstream_error=upstream_error,
+                    upstream_message=msg,
                 )
             llm_elapsed = (time.perf_counter() - llm_start) * 1000
             metrics.llm_durations_ms.append(llm_elapsed)
@@ -201,12 +213,21 @@ class LLMOrchestrator:
             if response.finish_reason in ("ERROR", "TIMEOUT"):
                 logger.warning("LLM returned %s: %s", response.finish_reason, response.raw)
                 metrics.total_ms = (time.perf_counter() - total_start) * 1000
+                is_timeout = response.finish_reason == "TIMEOUT"
+                upstream_error = "UPSTREAM_TIMEOUT" if is_timeout else "UPSTREAM_UNAVAILABLE"
+                msg = (
+                    "Không nhận được phản hồi từ nhà cung cấp LLM trong thời gian cho phép."
+                    if is_timeout
+                    else "Không thể kết nối hoặc nhà cung cấp LLM trả về lỗi."
+                )
                 return OrchestratorResult(
                     reply="Xin lỗi, hệ thống gặp sự cố khi kết nối nhà cung cấp AI. "
                           "Vui lòng thử lại hoặc sử dụng form tìm kiếm thủ công.",
                     tool_results=all_tool_results,
                     fallback="MANUAL_FORM",
                     metrics=metrics,
+                    upstream_error=upstream_error,
+                    upstream_message=msg,
                 )
 
             # --- Handle text-only response (no tool calls) ---
