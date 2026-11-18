@@ -14,6 +14,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Lock
 from typing import Callable, ContextManager, Iterable, Optional, Protocol
 
 from app.stations.domain import Station
@@ -140,10 +141,14 @@ def postgres_repository(database_url: str) -> SqlStationRepository:
 def sqlite_repository(connection: Optional[sqlite3.Connection] = None) -> SqlStationRepository:
     """Repository over an in-memory SQLite copy of migrations + seed (fallback, no DATABASE_URL)."""
     conn = connection or create_seeded_sqlite()
+    connection_lock = Lock()
 
     @contextmanager
     def connect():
-        yield conn
+        # FastAPI runs sync handlers on worker threads. Give one reader exclusive
+        # use of the shared SQLite connection until all three results are fetched.
+        with connection_lock:
+            yield conn
 
     return SqlStationRepository(connect, placeholder="?")
 

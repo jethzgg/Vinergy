@@ -1,4 +1,38 @@
+import { INELIGIBILITY_TEXT, SERVICE_TYPES } from './formFields.js'
+import { FAMILY_CODES } from './searchOptions.js'
+
 const apiBase = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/+$/, '')
+
+function isCoordinate(value, limit) {
+  return Number.isFinite(value) && Math.abs(value) <= limit
+}
+
+function isEnumList(values, allowed) {
+  return Array.isArray(values) && values.length > 0 && values.every(value => allowed.includes(value))
+}
+
+function isFamilyCountMap(counts) {
+  if (counts === null || typeof counts !== 'object' || Array.isArray(counts)) return false
+  return Object.entries(counts).every(([family, count]) =>
+    FAMILY_CODES.includes(family) && Number.isInteger(count) && count >= 0)
+}
+
+function isStationDetail(station, expectedId) {
+  if (station?.station_id !== expectedId) return false
+  const { coordinates, booking_eligible, ineligibility_reason, distance_display } = station
+  return typeof station.name === 'string' && station.name.length > 0
+    && typeof station.area_label === 'string' && station.area_label.length > 0
+    && isCoordinate(coordinates?.lat, 90) && isCoordinate(coordinates?.lng, 180)
+    && ['OPEN', 'CLOSED', 'MAINTENANCE'].includes(station.opening_status)
+    && isEnumList(station.services, SERVICE_TYPES)
+    && isEnumList(station.supported_families, FAMILY_CODES)
+    && isFamilyCountMap(station.available_batteries_by_family)
+    && isFamilyCountMap(station.available_charging_ports_by_family)
+    && (distance_display === null || typeof distance_display === 'string')
+    && (booking_eligible === null || typeof booking_eligible === 'boolean')
+    && (ineligibility_reason === null ||
+      (typeof ineligibility_reason === 'string' && Object.hasOwn(INELIGIBILITY_TEXT, ineligibility_reason)))
+}
 
 async function request(path, params, { signal } = {}) {
   const query = new URLSearchParams()
@@ -21,7 +55,7 @@ async function request(path, params, { signal } = {}) {
       return { ok: false, body: { error } }
     }
     const valid = path
-      ? body?.station?.station_id === decodeURIComponent(path.slice(1))
+      ? isStationDetail(body?.station, decodeURIComponent(path.slice(1)))
       : Array.isArray(body?.stations) && body.query && body.total === body.stations.length
     if (!valid) {
       throw new Error('Phản hồi dịch vụ trạm không hợp lệ.')

@@ -144,6 +144,24 @@ test('AE-02 drawer shows authoritative incompatibility after a compatibility cha
   await expect(dialog(page).getByRole('listitem').filter({ hasText: 'FAM_B' })).toContainText('5')
 })
 
+test('detail without coordinates shows a retryable error and recovers', async ({ page }) => {
+  const detailUrl = '**/stations/ST-01?**'
+  await page.route(detailUrl, async route => {
+    const response = await route.fetch()
+    const body = await response.json()
+    delete body.station.coordinates
+    await route.fulfill({ response, json: body })
+  })
+  await page.goto('/')
+  await card(page, 'ST-01').click()
+  await expect(dialog(page).getByRole('alert')).toContainText('Phản hồi dịch vụ trạm không hợp lệ.')
+  await expect(dialog(page).getByRole('link')).toHaveCount(0)
+  await page.unroute(detailUrl)
+  await dialog(page).getByRole('button', { name: 'Thử lại' }).click()
+  await expect(dialog(page)).toContainText('Vinergy Demo Station 01')
+  await expect(dialog(page).getByRole('link')).toHaveAttribute('href', /destination=21\.005%2C105\.8435$/)
+})
+
 test('detail loading, closing during request, retry and station not found', async ({ page }) => {
   await page.goto('/')
   let release, delivered
