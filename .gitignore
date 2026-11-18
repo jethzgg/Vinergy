@@ -29,3 +29,6 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# Playwright browser integration results
+frontend/test-results/

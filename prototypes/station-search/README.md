@@ -4,7 +4,9 @@ Reviewable front end for station discovery: filters, result list, interactive ma
 and the station detail drawer. **Draft for review — not a release.**
 
 All data is the fictional fixture in [`data/seed_stations_v0.json`](../../data/seed_stations_v0.json)
-(BR-01). No battery is ever held: the reservation lifecycle is Sprint 2 (1.2.4).
+(BR-01). No battery is ever held: the reservation lifecycle is Sprint 2.
+
+The [production frontend](../../frontend/README.md) runs the shared interface against FastAPI with an OpNavi map and Google Maps directions. This review harness keeps the WBS 1.2.1 fixture scenarios and Leaflet renderer.
 
 ## Run it
 
@@ -17,7 +19,7 @@ npm run dev          # http://localhost:5173
 Other scripts:
 
 ```bash
-npm run check:oracle # assert the domain logic against the AE oracles (41 checks)
+npm run check:oracle # assert the domain logic against the AE oracles (54 checks)
 npm run build        # production bundle into dist/
 npm run preview      # serve the built bundle
 ```
@@ -60,15 +62,11 @@ is shown as an error with a retry — never as an empty result (AE-05).
 
 ## Layout
 
-- `src/StationFinder.jsx` — the whole screen: filters, list, map, drawer, state switcher
-- `src/lib/stationsCore.js` — pure domain logic (validation, Haversine, filtering, eligibility); no data, no framework
-- `src/lib/stationsApi.js` — binds the fixture to that logic and adds latency and failure injection
-- `scripts/check-oracle.mjs` — asserts the logic against the published oracles
-
-`stationsCore.js` returns the response and error envelopes from
-[`docs/architecture/api_contracts.md`](../../docs/architecture/api_contracts.md),
-so when the real endpoints land, only `stationsApi.js` changes — the two
-functions become `fetch()` calls and the UI is untouched.
+- `src/StationFinder.jsx` selects a review scenario and wires the fixture adapter to the shared finder in `frontend/src/`.
+- `src/LeafletStationMap.jsx` renders fixture results in the prototype map.
+- `src/lib/stationsCore.js` holds the fixture oracle for distance, filtering and eligibility.
+- `src/lib/stationsApi.js` supplies fixture transport, latency and review failures.
+- `scripts/check-oracle.mjs` compares the prototype results with the published examples.
 
 ## Known gaps
 

@@ -10,6 +10,7 @@ const repoRoot = path.resolve(here, '..', '..')
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
+    dedupe: ['react', 'react-dom', 'lucide-react'],
     alias: {
       // Single source of truth: the repository station fixture (README "Station fixture JSON").
       '@fixture': path.resolve(repoRoot, 'data/seed_stations_v0.json'),
