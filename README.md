@@ -58,9 +58,10 @@ The requirements are written in English; Vietnamese sample utterances represent 
 4. **Frontend (React + Vite)**
    ```bash
    cd frontend
-   npm install
+   npm ci
    npm run build
    npm run dev
    ```
    Dev server: `http://localhost:5173`
 
+   The frontend opens the API-connected station finder. See the [station discovery guide](frontend/README.md) for Maps configuration, browser tests and acceptance checks.
