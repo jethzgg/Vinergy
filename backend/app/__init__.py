@@ -1,0 +1,1 @@
+"""Vinergy backend application package."""
