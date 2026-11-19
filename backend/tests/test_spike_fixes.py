@@ -37,15 +37,17 @@ class RecordingProvider(MockLLMProvider):
         self.received_histories: list[list[dict]] = []
 
     def send_message(self, *, messages, tools, system_prompt):
-        # Save a snapshot of the messages received
         self.received_histories.append(copy.deepcopy(messages))
-        return super().send_message(
-            messages=messages, tools=tools, system_prompt=system_prompt
-        )
+        if len(self.received_histories) <= 2:
+            return LLMResponse(tool_calls=[
+                ToolCall(name="search_stations", args={"service_type": "SWAPPING"}),
+            ])
+        return LLMResponse(text="Đã tìm xong.")
 
 
-def test_user_coordinates_stripped_from_llm_history():
+def test_user_coordinates_stripped_from_llm_history(monkeypatch):
     """Verify data.query.lat and lng are NEVER sent to the LLM (AD-05, NFR-04)."""
+    monkeypatch.setenv("LLM_MAX_TOOL_ROUNDS", "2")
     provider = RecordingProvider()
     orchestrator = LLMOrchestrator(provider)
 
@@ -59,26 +61,20 @@ def test_user_coordinates_stripped_from_llm_history():
         context=context,
     )
 
-    # 1. The caller/app result MUST still have full coordinates
-    assert result.tool_results
-    app_tool_data = result.tool_results[0]["data"]
-    assert "lat" in app_tool_data["query"]
-    assert "lng" in app_tool_data["query"]
-    assert app_tool_data["query"]["lat"] == 21.0050
-    assert app_tool_data["query"]["lng"] == 105.8435
+    assert len(result.tool_results) == 2
+    for tool_result in result.tool_results:
+        assert tool_result["ok"] is True
+        query = tool_result["data"]["query"]
+        assert {"lat": query["lat"], "lng": query["lng"]} == context["location"]
 
-    # 2. In the second turn sent to the provider, data.query MUST NOT have lat/lng
-    assert len(provider.received_histories) >= 2
-    second_turn_messages = provider.received_histories[1]
-
-    # Find the tool response message
-    tool_messages = [m for m in second_turn_messages if m.get("role") == "tool"]
-    assert len(tool_messages) >= 1
-    llm_tool_content = tool_messages[0]["content"]
-
-    assert "query" in llm_tool_content["data"]
-    assert "lat" not in llm_tool_content["data"]["query"], "lat was leaked to LLM!"
-    assert "lng" not in llm_tool_content["data"]["query"], "lng was leaked to LLM!"
+    tool_queries_by_turn = [
+        [message["content"]["data"]["query"] for message in history if message["role"] == "tool"]
+        for history in provider.received_histories
+    ]
+    assert [len(queries) for queries in tool_queries_by_turn] == [0, 1, 2]
+    for queries in tool_queries_by_turn:
+        for query in queries:
+            assert {"lat", "lng"}.isdisjoint(query), "User coordinates leaked to the LLM"
 
 
 def test_sanitize_tool_result_unit():
@@ -404,6 +400,30 @@ def google_one_call(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "fake-key")
     monkeypatch.setenv("SESSION_SECRET", "test-only-server-secret")
     monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", "1")
+
+
+def test_google_timeout_consumes_quota_across_sessions(monkeypatch, google_one_call):
+    from unittest.mock import Mock
+
+    from google import genai
+
+    sdk = Mock()
+    sdk.models.generate_content.side_effect = TimeoutError()
+    monkeypatch.setattr(genai, "Client", lambda **kwargs: sdk)
+    payload = {"message": "Tìm trạm"}
+    with TestClient(app) as first, TestClient(app) as second:
+        timed_out = first.post("/api/v1/spike/llm-chat", json=payload)
+        rejected = second.post("/api/v1/spike/llm-chat", json=payload)
+        assert first.cookies["vinergy_spike_sid"] != second.cookies["vinergy_spike_sid"]
+
+    assert timed_out.status_code == 504
+    assert timed_out.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
+    assert rejected.status_code == 429
+    assert rejected.json()["error"]["code"] == "RATE_LIMITED"
+    assert rejected.json()["fallback"] == "MANUAL_FORM"
+    assert rejected.json()["request_id"] == rejected.headers["X-Request-Id"]
+    assert int(rejected.headers["Retry-After"]) > 0
+    sdk.models.generate_content.assert_called_once()
 
 
 def test_new_cookie_and_tool_round_share_google_cap(monkeypatch, google_one_call):
