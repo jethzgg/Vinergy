@@ -315,3 +315,48 @@ def test_endpoint_returns_504_on_upstream_timeout(monkeypatch):
     assert body["error"]["code"] == "UPSTREAM_TIMEOUT"
     assert body["fallback"] == "MANUAL_FORM"
     assert "request_id" in body
+
+
+def test_google_without_key_returns_manual_form(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/spike/llm-chat", json={"message": "Tìm trạm"},
+            headers={"X-Request-Id": "client-value"},
+        )
+        assert client.get("/health").status_code == 200
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+    assert body["fallback"] == "MANUAL_FORM"
+    assert body["request_id"] == response.headers["X-Request-Id"] != "client-value"
+    assert "LLM_API_KEY" not in response.text
+
+
+@pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError("private diagnostic")])
+def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
+    from types import SimpleNamespace
+
+    from google import genai
+
+    def generate_content(**kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        genai, "Client",
+        lambda **kwargs: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)),
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_provider", "google")
+    monkeypatch.setattr(settings, "llm_api_key", "fake-key")
+    with TestClient(app) as client:
+        response = client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
+
+    expected = (504, "UPSTREAM_TIMEOUT") if isinstance(failure, TimeoutError) else (503, "UPSTREAM_UNAVAILABLE")
+    assert (response.status_code, response.json()["error"]["code"]) == expected
+    assert response.json()["fallback"] == "MANUAL_FORM"
+    assert response.json()["request_id"] == response.headers["X-Request-Id"]
+    assert "private diagnostic" not in response.text
