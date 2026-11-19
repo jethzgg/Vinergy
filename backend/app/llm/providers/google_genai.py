@@ -168,7 +168,7 @@ class GoogleGenAIProvider(BaseLLMProvider):
                 model=self._model, contents=contents, config=config,
             )
         except Exception as exc:
-            is_timeout = is_transport_timeout(exc) or getattr(exc, "code", None) == 504
+            is_timeout = is_transport_timeout(exc) or getattr(exc, "code", None) in (408, 504)
             finish_reason = "TIMEOUT" if is_timeout else "ERROR"
             logger.error("Gemini API %s (%s)", finish_reason, type(exc).__name__)
             return LLMResponse(
