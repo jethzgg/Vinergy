@@ -124,10 +124,12 @@ def test_orchestrator_handles_timeout_finish_reason():
     assert "sự cố" in result.reply.lower() or "thủ công" in result.reply.lower()
 
 
-def test_google_genai_provider_timeout_config():
+def test_google_genai_provider_timeout_config(monkeypatch):
     """Verify GoogleGenAIProvider sets HttpOptions timeout."""
     from app.llm.providers.google_genai import GoogleGenAIProvider
 
+    monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", "10")
+    get_settings.cache_clear()
     provider = GoogleGenAIProvider(
         api_key="fake-key-for-test",
         model="gemini-2.5-flash",
@@ -135,6 +137,8 @@ def test_google_genai_provider_timeout_config():
     )
     assert provider._timeout_ms == 5000
     assert provider._http_options.timeout == 5000
+    assert provider._http_options.retry_options.attempts == 1
+    get_settings.cache_clear()
 
 
 # ===========================================================================
@@ -217,13 +221,15 @@ def test_rate_limiter_enforcement():
     }
 
     # First 10 requests under session-1 should succeed (200 OK)
-    headers = {"X-Session-Id": "test-session-rate-limit"}
     for i in range(max_rpm):
-        res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers)
+        res = client.post("/api/v1/spike/llm-chat", json=payload)
         assert res.status_code == 200, f"Request {i+1} failed with {res.status_code}"
 
     # 11th request under the same session must return 429 Too Many Requests
-    blocked_res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers)
+    blocked_res = client.post(
+        "/api/v1/spike/llm-chat", json=payload,
+        headers={"X-Session-Id": "new-session", "Session-Id": "another-session"},
+    )
     assert blocked_res.status_code == 429
     assert "Retry-After" in blocked_res.headers
     assert int(blocked_res.headers["Retry-After"]) >= 1
@@ -254,18 +260,17 @@ def test_separate_sessions_on_same_ip_do_not_share_rate_limit():
     }
 
     # User A consumes all quota (10 requests)
-    headers_a = {"X-Session-Id": "user-a-on-wifi"}
     for _ in range(max_rpm):
-        res = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_a)
+        res = client.post("/api/v1/spike/llm-chat", json=payload)
         assert res.status_code == 200
 
     # User A gets blocked on 11th call
-    res_a_blocked = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_a)
+    res_a_blocked = client.post("/api/v1/spike/llm-chat", json=payload)
     assert res_a_blocked.status_code == 429
 
-    # User B on the EXACT same IP/client with their own session MUST still succeed (200 OK)
-    headers_b = {"X-Session-Id": "user-b-on-same-wifi"}
-    res_b = client.post("/api/v1/spike/llm-chat", json=payload, headers=headers_b)
+    # Separate cookie jar, same client address.
+    with TestClient(app) as other_client:
+        res_b = other_client.post("/api/v1/spike/llm-chat", json=payload)
     assert res_b.status_code == 200, "User B was wrongly rate-limited by User A's usage on the same IP!"
 
     rate_limiter.reset()
@@ -349,9 +354,11 @@ def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
         genai, "Client",
         lambda **kwargs: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)),
     )
-    settings = get_settings()
-    monkeypatch.setattr(settings, "llm_provider", "google")
-    monkeypatch.setattr(settings, "llm_api_key", "fake-key")
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.setenv("LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("SESSION_SECRET", "test-only-server-secret")
+    monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", "10")
+    get_settings.cache_clear()
     with TestClient(app) as client:
         response = client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
 
@@ -360,3 +367,118 @@ def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
     assert response.json()["fallback"] == "MANUAL_FORM"
     assert response.json()["request_id"] == response.headers["X-Request-Id"]
     assert "private diagnostic" not in response.text
+
+
+
+@pytest.fixture(autouse=True)
+def reset_spike_state():
+    get_settings.cache_clear()
+    rate_limiter.reset()
+    yield
+    get_settings.cache_clear()
+    rate_limiter.reset()
+
+
+@pytest.fixture
+def google_one_call(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.setenv("LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("SESSION_SECRET", "test-only-server-secret")
+    monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", "1")
+
+
+def test_new_cookie_and_tool_round_share_google_cap(monkeypatch, google_one_call):
+    from unittest.mock import Mock
+
+    from google import genai
+    from google.genai import types
+
+    tool_reply = types.GenerateContentResponse(candidates=[types.Candidate(
+        content=types.Content(parts=[types.Part(function_call=types.FunctionCall(
+            name="search_stations", args={"service_type": "SWAPPING"},
+        ))]),
+    )])
+    sdk = Mock()
+    sdk.models.generate_content.return_value = tool_reply
+    monkeypatch.setattr(genai, "Client", lambda **kwargs: sdk)
+    payload = {
+        "message": "Tìm trạm đổi pin",
+        "context": {"location": {"lat": 21.005, "lng": 105.8435}, "family_code": "FAM_A"},
+    }
+    with TestClient(app) as first, TestClient(app) as second:
+        for client in (first, second):
+            response = client.post("/api/v1/spike/llm-chat", json=payload)
+            assert response.status_code == 429
+            assert response.json()["error"]["code"] == "RATE_LIMITED"
+            assert response.json()["fallback"] == "MANUAL_FORM"
+            assert int(response.headers["Retry-After"]) > 0
+    assert sdk.models.generate_content.call_count == 1
+
+
+def test_parallel_requests_share_last_google_slot(monkeypatch, google_one_call):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import Mock
+
+    from google import genai
+    from google.genai import types
+
+    sdk = Mock()
+    sdk.models.generate_content.return_value = types.GenerateContentResponse(candidates=[
+        types.Candidate(content=types.Content(parts=[types.Part(text="Kết quả")]))
+    ])
+    monkeypatch.setattr(genai, "Client", lambda **kwargs: sdk)
+    start = Barrier(2, timeout=5)
+
+    def chat(client):
+        start.wait()
+        return client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
+
+    with TestClient(app) as first, TestClient(app) as second, ThreadPoolExecutor(2) as pool:
+        responses = list(pool.map(chat, (first, second)))
+    assert sorted(response.status_code for response in responses) == [200, 429]
+    rejected = next(response for response in responses if response.status_code == 429)
+    assert int(rejected.headers["Retry-After"]) > 0
+    assert sdk.models.generate_content.call_count == 1
+
+
+def test_spike_cookie_rejects_tampering_and_expiration(monkeypatch):
+    from http.cookies import SimpleCookie
+
+    import app.llm.spike_router as router
+
+    payload = {"message": "Tìm trạm"}
+    with TestClient(app) as client:
+        first = client.post("/api/v1/spike/llm-chat", json=payload)
+        first_cookie = SimpleCookie(first.headers["Set-Cookie"])["vinergy_spike_sid"]
+        assert first_cookie["httponly"]
+        assert first_cookie["samesite"] == "lax"
+        old_value = first_cookie.value
+
+    replacement = "a" if old_value[-1] != "a" else "b"
+    with TestClient(app) as client:
+        tampered = client.post(
+            "/api/v1/spike/llm-chat", json=payload,
+            headers={"Cookie": f"vinergy_spike_sid={old_value[:-1]}{replacement}"},
+        )
+        assert "vinergy_spike_sid=" in tampered.headers["Set-Cookie"]
+
+    now = router.time.time()
+    monkeypatch.setattr(router.time, "time", lambda: now + int(first_cookie["max-age"]) + 1)
+    with TestClient(app) as client:
+        expired = client.post(
+            "/api/v1/spike/llm-chat", json=payload,
+            headers={"Cookie": f"vinergy_spike_sid={old_value}"},
+        )
+        assert "vinergy_spike_sid=" in expired.headers["Set-Cookie"]
+
+
+def test_limiter_recovers_capacity_and_removes_old_sessions(monkeypatch):
+    now = 10.0
+    monkeypatch.setattr("time.monotonic", lambda: now)
+    assert rate_limiter.is_allowed("old", 1) == (True, 0)
+    assert rate_limiter.is_allowed("old", 1) == (False, 60)
+    now += 60
+    assert rate_limiter.is_allowed("new", 1) == (True, 0)
+    assert set(rate_limiter._requests) == {"new"}
+    assert rate_limiter.is_allowed("old", 1) == (True, 0)
