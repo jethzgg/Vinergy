@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import get_settings
+from app.llm.limits import RateLimitExceeded
 from app.llm.providers.base import BaseLLMProvider, LLMResponse, is_transport_timeout
 from app.llm.schemas import load_tool_schemas
 from app.llm.tool_adapter import execute_tool
@@ -120,6 +121,7 @@ class OrchestratorResult:
     metrics: LatencyMetrics
     upstream_error: str | None = None  # UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT | None
     upstream_message: str | None = None
+    retry_after: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +186,15 @@ class LLMOrchestrator:
                     messages=messages,
                     tools=tools,
                     system_prompt=system_prompt,
+                )
+            except RateLimitExceeded as exc:
+                metrics.total_ms = (time.perf_counter() - total_start) * 1000
+                return OrchestratorResult(
+                    reply="Quá giới hạn số lượt yêu cầu. Vui lòng thử lại sau.",
+                    tool_results=all_tool_results,
+                    fallback="MANUAL_FORM",
+                    metrics=metrics,
+                    retry_after=exc.retry_after,
                 )
             except Exception as exc:
                 logger.error("LLM provider error (round %d): %s", round_num, type(exc).__name__)

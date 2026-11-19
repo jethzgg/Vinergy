@@ -13,7 +13,11 @@ import json
 import logging
 from typing import Any
 
-from app.llm.providers.base import BaseLLMProvider, LLMResponse, ToolCall, is_transport_timeout
+from app.core.config import get_settings
+from app.llm.limits import RateLimitExceeded, google_call_limiter
+from app.llm.providers.base import (
+    BaseLLMProvider, LLMResponse, ProviderConfigurationError, ToolCall, is_transport_timeout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +50,17 @@ class GoogleGenAIProvider(BaseLLMProvider):
     """Adapter for the google-genai SDK with function calling."""
 
     def __init__(self, *, api_key: str, model: str, timeout_ms: int = 15_000) -> None:
+        if not api_key.strip():
+            raise ProviderConfigurationError("LLM_API_KEY is required for Google.")
+        self._calls_per_minute = get_settings().llm_provider_calls_per_minute
+        if self._calls_per_minute is None:
+            raise ProviderConfigurationError("LLM_PROVIDER_CALLS_PER_MINUTE is required for Google.")
+
         try:
             from google import genai
             from google.genai import types
         except ImportError as exc:
-            raise ImportError(
+            raise ProviderConfigurationError(
                 "google-genai is required for the Google provider. "
                 "Install with: pip install google-genai"
             ) from exc
@@ -59,7 +69,9 @@ class GoogleGenAIProvider(BaseLLMProvider):
         self._types = types
         self._model = model
         self._timeout_ms = timeout_ms
-        self._http_options = types.HttpOptions(timeout=timeout_ms)
+        self._http_options = types.HttpOptions(
+            timeout=timeout_ms, retry_options=types.HttpRetryOptions(attempts=1),
+        )
         self._client = genai.Client(api_key=api_key, http_options=self._http_options)
         logger.info("GoogleGenAIProvider initialized (model=%s, timeout=%dms)", model, timeout_ms)
 
@@ -141,16 +153,19 @@ class GoogleGenAIProvider(BaseLLMProvider):
         genai_tools = self._build_tools(tools)
         contents = self._build_contents(messages)
 
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            tools=genai_tools,
+            temperature=0.1,
+            http_options=self._http_options,
+        )
+        allowed, retry_after = google_call_limiter.is_allowed("google", self._calls_per_minute)
+        if not allowed:
+            raise RateLimitExceeded(retry_after)
+
         try:
             response = self._client.models.generate_content(
-                model=self._model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    tools=genai_tools,
-                    temperature=0.1,
-                    http_options=self._http_options,
-                ),
+                model=self._model, contents=contents, config=config,
             )
         except Exception as exc:
             is_timeout = is_transport_timeout(exc) or getattr(exc, "code", None) == 504

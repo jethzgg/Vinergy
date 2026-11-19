@@ -81,3 +81,16 @@ Thực hiện đo lường tách biệt giữa thời gian xử lý của mô h�
 1. **Chuẩn hóa Prompt:** Nên đưa các ví dụ mẫu (Few-shot examples) bằng tiếng Việt vào `SYSTEM_PROMPT` để mô hình hiểu tốt hơn các từ lóng như "hết điện", "đổi bình".
 2. **Kiểm soát chi phí & Quota:** Cần áp dụng bộ đệm (cache) cho các câu hỏi trùng lặp hoặc đặt rate-limit chặt chẽ trên mỗi session (`LLM_RATE_LIMIT_PER_MINUTE=10`).
 3. **Giữ nguyên luồng dữ liệu:** Giao diện người dùng ở Sprint 3 nên trực tiếp render danh sách trạm từ khối dữ liệu `tool_results` của API thay vì để LLM tự sinh lại dạng văn bản markdown để tránh sai lệch hiển thị.
+
+
+## 7. Cấu hình demo sau khi sửa quota
+
+Mặc định spike dùng mock. Để bật Google, đặt `LLM_PROVIDER=google`, cung cấp `LLM_API_KEY` và dùng `SESSION_SECRET` riêng cho cookie có chữ ký. Đặt `LLM_PROVIDER_CALLS_PER_MINUTE` là số nguyên dương theo quota của key demo. Tham số này đếm mỗi lần gọi Google, kể cả lượt gọi sau khi chạy tool. `LLM_RATE_LIMIT_PER_MINUTE` đếm số lượt chat của từng phiên và mặc định là 10.
+
+Chạy backend spike với **một worker** khi dùng bộ đếm trong bộ nhớ. Mỗi process có trần riêng, bao gồm CLI và benchmark nếu chạy độc lập. Nếu dùng nhiều worker hoặc instance với cùng key, đặt trần chung tại lớp giới hạn dùng chung. Client gọi HTTP cần giữ cookie `vinergy_spike_sid` giữa các lượt chat.
+
+| HTTP | Mã lỗi | Hành động của client |
+| --- | --- | --- |
+| 429 | RATE_LIMITED | Chuyển sang form hoặc thử lại sau số giây trong Retry-After |
+| 503 | UPSTREAM_UNAVAILABLE | Chuyển sang form khi cấu hình hoặc nhà cung cấp chưa sẵn sàng |
+| 504 | UPSTREAM_TIMEOUT | Chuyển sang form hoặc chủ động thử lại |

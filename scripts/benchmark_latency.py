@@ -24,6 +24,7 @@ if BACKEND_DIR not in sys.path:
 
 from app.core.config import get_settings
 from app.llm.orchestrator import LLMOrchestrator
+from app.llm.providers.base import ProviderConfigurationError
 from app.llm.providers.mock_provider import MockLLMProvider
 
 
@@ -67,7 +68,7 @@ def run_benchmark(iterations: int = 30):
         msg, ctx = test_queries[i % len(test_queries)]
         res = orchestrator.handle(message=msg, context=ctx)
         
-        if res.fallback == "MANUAL_FORM" and not res.tool_results:
+        if res.fallback == "MANUAL_FORM":
             failures += 1
 
         m = res.metrics
@@ -118,4 +119,7 @@ def run_benchmark(iterations: int = 30):
 
 
 if __name__ == "__main__":
-    run_benchmark(30)
+    try:
+        run_benchmark(30)
+    except ProviderConfigurationError as error:
+        raise SystemExit(str(error)) from None

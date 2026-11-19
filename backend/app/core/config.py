@@ -11,9 +11,12 @@ from pathlib import Path
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SESSION_SECRET = "change-me-local-dev-only"
 
 # Resolve project root (two levels up from this file → backend/app/core → repo root)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +40,7 @@ class Settings(BaseSettings):
     database_path: str = "data/vinergy_dev.db"
 
     # --- Session ---
-    session_secret: str = "change-me-local-dev-only"
+    session_secret: str = DEFAULT_SESSION_SECRET
 
     # --- LLM Provider (server-side only) ---
     llm_provider: str = ""          # e.g. "google", "openai", "mock"
@@ -47,7 +50,8 @@ class Settings(BaseSettings):
     # --- LLM Orchestrator limits ---
     llm_timeout_ms: int = 15_000
     llm_max_tool_rounds: int = 3
-    llm_rate_limit_per_minute: int = 10
+    llm_rate_limit_per_minute: PositiveInt = 10
+    llm_provider_calls_per_minute: PositiveInt | None = None
 
     # --- Seed data ---
     seed_stations_path: str = str(_PROJECT_ROOT / "data" / "seed_stations_v0.json")

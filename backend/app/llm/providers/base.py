@@ -9,6 +9,10 @@ from typing import Any
 from httpx import TimeoutException
 
 
+class ProviderConfigurationError(Exception):
+    """The selected provider cannot start with the current settings."""
+
+
 def is_transport_timeout(exc: Exception) -> bool:
     return isinstance(exc, (TimeoutError, TimeoutException))
 

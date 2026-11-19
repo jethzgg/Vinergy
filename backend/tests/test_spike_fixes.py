@@ -20,6 +20,7 @@ from app.llm.providers.mock_provider import MockLLMProvider
 from app.llm.providers.base import LLMResponse, ToolCall
 from app.llm.tool_adapter import execute_tool
 from app.llm.spike_router import rate_limiter
+from app.llm.limits import google_call_limiter
 from app.core.config import get_settings
 
 
@@ -326,6 +327,8 @@ def test_google_without_key_returns_manual_form(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "llm_provider", "google")
     monkeypatch.setattr(settings, "llm_api_key", "")
+    monkeypatch.setattr(settings, "session_secret", "test-only-server-secret")
+    monkeypatch.setattr(settings, "llm_provider_calls_per_minute", 10)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(
             "/api/v1/spike/llm-chat", json={"message": "Tìm trạm"},
@@ -374,7 +377,9 @@ def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
 def reset_spike_state():
     get_settings.cache_clear()
     rate_limiter.reset()
+    google_call_limiter.reset()
     yield
+    google_call_limiter.reset()
     get_settings.cache_clear()
     rate_limiter.reset()
 
@@ -482,3 +487,26 @@ def test_limiter_recovers_capacity_and_removes_old_sessions(monkeypatch):
     assert rate_limiter.is_allowed("new", 1) == (True, 0)
     assert set(rate_limiter._requests) == {"new"}
     assert rate_limiter.is_allowed("old", 1) == (True, 0)
+
+
+@pytest.mark.parametrize("limit", ["", "0", "invalid"])
+def test_invalid_provider_cap_returns_manual_form(monkeypatch, google_one_call, limit):
+    if limit:
+        monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", limit)
+    else:
+        monkeypatch.delenv("LLM_PROVIDER_CALLS_PER_MINUTE")
+    with TestClient(app) as client:
+        response = client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+    assert response.json()["fallback"] == "MANUAL_FORM"
+
+
+def test_google_spike_rejects_default_signing_secret(monkeypatch, google_one_call):
+    from app.core.config import DEFAULT_SESSION_SECRET
+
+    monkeypatch.setenv("SESSION_SECRET", DEFAULT_SESSION_SECRET)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
+    assert response.status_code == 503
+    assert response.json()["fallback"] == "MANUAL_FORM"

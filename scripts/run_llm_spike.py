@@ -23,6 +23,7 @@ if BACKEND_DIR not in sys.path:
 
 from app.core.config import get_settings
 from app.llm.orchestrator import LLMOrchestrator
+from app.llm.providers.base import ProviderConfigurationError
 from app.llm.providers.mock_provider import MockLLMProvider
 
 
@@ -134,4 +135,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ProviderConfigurationError as error:
+        raise SystemExit(str(error)) from None
