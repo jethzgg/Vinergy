@@ -6,6 +6,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from httpx import TimeoutException
+
+
+def is_transport_timeout(exc: Exception) -> bool:
+    return isinstance(exc, (TimeoutError, TimeoutException))
+
 
 @dataclass
 class ToolCall:

@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -91,14 +91,18 @@ class SpikeChatResponse(BaseModel):
 # Provider factory
 # ---------------------------------------------------------------------------
 
+class ProviderConfigurationError(Exception):
+    """The selected provider cannot start with the current settings."""
+
+
 def _create_provider():
     """Create the LLM provider based on configuration."""
     settings = get_settings()
     provider_name = (settings.llm_provider or "mock").lower()
 
     if provider_name == "google":
-        if not settings.llm_api_key:
-            raise ValueError("LLM_API_KEY is required for the Google provider.")
+        if not settings.llm_api_key.strip():
+            raise ProviderConfigurationError("LLM_API_KEY is required for the Google provider.")
         from app.llm.providers.google_genai import GoogleGenAIProvider
         return GoogleGenAIProvider(
             api_key=settings.llm_api_key,
@@ -134,6 +138,24 @@ def _resolve_session_id(request: Request) -> tuple[str, bool]:
     return new_sid, True
 
 
+def _fallback_response(
+    request: Request, status: int, code: str, message: str, *, retry_after: int | None = None,
+) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None) or f"req_{uuid.uuid4().hex}"
+    headers = {"X-Request-Id": request_id}
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return JSONResponse(
+        status_code=status,
+        headers=headers,
+        content={
+            "error": {"code": code, "message": message, "details": []},
+            "request_id": request_id,
+            "fallback": "MANUAL_FORM",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -156,28 +178,21 @@ def spike_llm_chat(req: SpikeChatRequest, request: Request, response: Response):
         session_id, max_requests=max_rpm, window_seconds=60.0
     )
     if not allowed:
-        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
-        err_resp = JSONResponse(
-            status_code=429,
-            headers={
-                "Retry-After": str(retry_after),
-                "X-Request-Id": req_id,
-            },
-            content={
-                "error": {
-                    "code": "RATE_LIMITED",
-                    "message": "Quá giới hạn số lượt yêu cầu. Vui lòng thử lại sau.",
-                    "details": [],
-                },
-                "request_id": req_id,
-                "fallback": "MANUAL_FORM",
-            },
+        return _fallback_response(
+            request, 429, "RATE_LIMITED", "Quá giới hạn số lượt yêu cầu. Vui lòng thử lại sau.",
+            retry_after=retry_after,
+        )
+
+    try:
+        provider = _create_provider()
+    except ProviderConfigurationError:
+        unavailable = _fallback_response(
+            request, 503, "UPSTREAM_UNAVAILABLE", "Nhà cung cấp LLM chưa được cấu hình.",
         )
         if is_new_session:
-            err_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
-        return err_resp
+            unavailable.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
+        return unavailable
 
-    provider = _create_provider()
     orchestrator = LLMOrchestrator(provider)
 
     context: dict[str, Any] = {}
@@ -191,44 +206,15 @@ def spike_llm_chat(req: SpikeChatRequest, request: Request, response: Response):
 
     result = orchestrator.handle(message=req.message, context=context)
 
-    # Handle upstream provider errors per api_contracts §2.2, §5.5, §5.6
-    if result.upstream_error == "UPSTREAM_TIMEOUT":
-        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
-        timeout_resp = JSONResponse(
-            status_code=504,
-            headers={"X-Request-Id": req_id},
-            content={
-                "error": {
-                    "code": "UPSTREAM_TIMEOUT",
-                    "message": result.upstream_message or "Không nhận được phản hồi từ nhà cung cấp LLM trong thời gian cho phép.",
-                    "details": [],
-                },
-                "request_id": req_id,
-                "fallback": "MANUAL_FORM",
-            },
+    if result.upstream_error:
+        status = 504 if result.upstream_error == "UPSTREAM_TIMEOUT" else 503
+        error = _fallback_response(
+            request, status, result.upstream_error,
+            result.upstream_message or "Không nhận được phản hồi từ nhà cung cấp LLM.",
         )
         if is_new_session:
-            timeout_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
-        return timeout_resp
-
-    if result.upstream_error == "UPSTREAM_UNAVAILABLE":
-        req_id = request.headers.get("X-Request-Id") or f"req_{uuid.uuid4().hex[:24]}"
-        unavail_resp = JSONResponse(
-            status_code=503,
-            headers={"X-Request-Id": req_id},
-            content={
-                "error": {
-                    "code": "UPSTREAM_UNAVAILABLE",
-                    "message": result.upstream_message or "Không thể kết nối hoặc nhà cung cấp LLM trả về lỗi.",
-                    "details": [],
-                },
-                "request_id": req_id,
-                "fallback": "MANUAL_FORM",
-            },
-        )
-        if is_new_session:
-            unavail_resp.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
-        return unavail_resp
+            error.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")
+        return error
 
     if is_new_session:
         response.set_cookie("vinergy_sid", session_id, httponly=True, samesite="lax", path="/")

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import get_settings
-from app.llm.providers.base import BaseLLMProvider, LLMResponse
+from app.llm.providers.base import BaseLLMProvider, LLMResponse, is_transport_timeout
 from app.llm.schemas import load_tool_schemas
 from app.llm.tool_adapter import execute_tool
 
@@ -186,11 +186,10 @@ class LLMOrchestrator:
                     system_prompt=system_prompt,
                 )
             except Exception as exc:
-                logger.error("LLM provider error (round %d): %s", round_num, exc)
+                logger.error("LLM provider error (round %d): %s", round_num, type(exc).__name__)
                 metrics.llm_durations_ms.append((time.perf_counter() - llm_start) * 1000)
                 metrics.total_ms = (time.perf_counter() - total_start) * 1000
-                err_str = str(exc).lower()
-                is_timeout = "timeout" in err_str or "timed out" in err_str or "deadline" in err_str
+                is_timeout = is_transport_timeout(exc)
                 upstream_error = "UPSTREAM_TIMEOUT" if is_timeout else "UPSTREAM_UNAVAILABLE"
                 msg = (
                     "Không nhận được phản hồi từ nhà cung cấp LLM trong thời gian cho phép."

@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Any
 
-from app.llm.providers.base import BaseLLMProvider, LLMResponse, ToolCall
+from app.llm.providers.base import BaseLLMProvider, LLMResponse, ToolCall, is_transport_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -153,14 +153,13 @@ class GoogleGenAIProvider(BaseLLMProvider):
                 ),
             )
         except Exception as exc:
-            err_str = str(exc).lower()
-            is_timeout = "timeout" in err_str or "timed out" in err_str or "deadline" in err_str
+            is_timeout = is_transport_timeout(exc) or getattr(exc, "code", None) == 504
             finish_reason = "TIMEOUT" if is_timeout else "ERROR"
-            logger.error("Gemini API %s: %s", finish_reason, exc)
+            logger.error("Gemini API %s (%s)", finish_reason, type(exc).__name__)
             return LLMResponse(
                 text=None,
                 finish_reason=finish_reason,
-                raw=str(exc),
+                raw=type(exc).__name__,
             )
 
         # Parse response
