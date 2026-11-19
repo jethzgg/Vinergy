@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import errors
+from app.llm.spike_router import router as spike_router
 from app.stations.repository import postgres_repository, sqlite_repository
 from app.stations.router import router as stations_router
 from app.stations.service import StationService
@@ -40,6 +41,7 @@ def _station_repository():
 # Tests can swap this service (see tests/conftest.py).
 app.state.station_service = StationService(_station_repository())
 app.include_router(stations_router)
+app.include_router(spike_router)
 
 allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
 app.add_middleware(
