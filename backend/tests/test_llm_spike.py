@@ -448,7 +448,9 @@ class TestSpikeEndpoint:
             "/api/v1/spike/llm-chat",
             json={"message": "", "context": {}},
         )
-        assert response.status_code == 422  # Pydantic validation error
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "INVALID_INPUT"
+        assert response.json()["request_id"] == response.headers["X-Request-Id"]
 
     def test_spike_chat_no_tool_call(self):
         response = client.post(
