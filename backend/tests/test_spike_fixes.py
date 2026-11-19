@@ -13,6 +13,7 @@ import copy
 import math
 import pytest
 from fastapi.testclient import TestClient
+from google.genai.errors import ClientError, ServerError
 
 from app.main import app
 from app.llm.orchestrator import LLMOrchestrator, sanitize_tool_result_for_llm
@@ -345,8 +346,17 @@ def test_google_without_key_returns_manual_form(monkeypatch):
     assert "LLM_API_KEY" not in response.text
 
 
-@pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError("private diagnostic")])
-def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (TimeoutError(), 504, "UPSTREAM_TIMEOUT"),
+        (ClientError(408, {"error": {"message": "private diagnostic"}}), 504, "UPSTREAM_TIMEOUT"),
+        (ServerError(504, {"error": {"message": "private diagnostic"}}), 504, "UPSTREAM_TIMEOUT"),
+        (ConnectionError("private diagnostic"), 503, "UPSTREAM_UNAVAILABLE"),
+    ],
+    ids=["transport-timeout", "sdk-408", "sdk-504", "connection-error"],
+)
+def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure, status, code):
     from types import SimpleNamespace
 
     from google import genai
@@ -364,13 +374,16 @@ def test_google_sdk_exception_maps_to_http_fallback(monkeypatch, failure):
     monkeypatch.setenv("LLM_PROVIDER_CALLS_PER_MINUTE", "10")
     get_settings.cache_clear()
     with TestClient(app) as client:
-        response = client.post("/api/v1/spike/llm-chat", json={"message": "Tìm trạm"})
+        response = client.post(
+            "/api/v1/spike/llm-chat", json={"message": "Tìm trạm"},
+            headers={"X-Request-Id": "client-value"},
+        )
 
-    expected = (504, "UPSTREAM_TIMEOUT") if isinstance(failure, TimeoutError) else (503, "UPSTREAM_UNAVAILABLE")
-    assert (response.status_code, response.json()["error"]["code"]) == expected
+    assert (response.status_code, response.json()["error"]["code"]) == (status, code)
     assert response.json()["fallback"] == "MANUAL_FORM"
-    assert response.json()["request_id"] == response.headers["X-Request-Id"]
+    assert response.json()["request_id"] == response.headers["X-Request-Id"] != "client-value"
     assert "private diagnostic" not in response.text
+    assert "fake-key" not in response.text
 
 
 
