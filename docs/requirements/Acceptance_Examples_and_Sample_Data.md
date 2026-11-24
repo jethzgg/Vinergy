@@ -1,12 +1,12 @@
 # Vinergy — Ví dụ nghiệm thu và dữ liệu mẫu
 
-Phiên bản 0.2. Cập nhật ngày 2 tháng 11 năm 2026. **Bản nháp — đang chờ rà soát; các ví dụ chưa phải là kiểm thử đã được triển khai.** M4 rà soát bộ dữ liệu mẫu và thiết kế dữ liệu; M7 xây dựng ca kiểm thử từ các ví dụ; M1 rà soát hành vi mong muốn. [SRS](SRS.md) là nguồn chuẩn cho mã yêu cầu và quy tắc; [danh sách công việc sản phẩm](Product_Backlog.md) liên kết chúng với các công việc cần thực hiện.
+Phiên bản 0.4. Cập nhật ngày 24 tháng 11 năm 2026. **Yêu cầu đang chờ nhóm rà soát.** AE-01–AE-07 và các phần liên quan Sprint 1 của AE-20/21/23/24 đã có kiểm thử local, được truy vết trong [báo cáo Sprint 1](../plans/1.3.4-sprint-1-review.md). Các mục checklist bên dưới thể hiện kịch bản yêu cầu, trạng thái chạy thực tế lấy từ báo cáo. M4 rà soát bộ dữ liệu mẫu và thiết kế dữ liệu; M7 xây dựng ca kiểm thử từ các ví dụ; M1 rà soát hành vi mong muốn. [SRS](SRS.md) là nguồn chuẩn cho mã yêu cầu và quy tắc; [danh sách công việc sản phẩm](Product_Backlog.md) liên kết chúng với các công việc cần thực hiện.
 
 ## Bộ dữ liệu mẫu ban đầu
 
 Sử dụng [seed_stations_v0.json](../../data/seed_stations_v0.json): 18 trạm giả lập, `FAM_A`/`FAM_B`, người dùng thử nghiệm `USER-A`/`USER-B`, không có bản nháp đặt pin hoặc đơn đặt pin ban đầu. Tọa độ gần đúng và số lượng lấy từ đề xuất được cung cấp, chưa được xác minh là địa điểm dịch vụ có thật. Tên và nhãn khu vực mang tính minh họa, không liên kết với nhà sản xuất hoặc đơn vị vận hành nào. Các số lượng không xác nhận thành phần hóa học, điện áp, mức sạc hoặc khả năng tương thích với xe thực tế.
 
-Khôi phục **bản sao kiểm thử độc lập** về trạng thái ban đầu trước mỗi ví dụ, trừ khi phần thiết lập quy định thay đổi riêng. Tài liệu này không cung cấp chương trình nạp/đặt lại dữ liệu có thể thực thi. Công cụ đặt lại dữ liệu được xây dựng sau này phải đáp ứng FR-13; không bao giờ đặt lại dữ liệu dùng chung hoặc dữ liệu thật thông qua giao diện người lái xe.
+Khôi phục **bản sao kiểm thử độc lập** về trạng thái ban đầu trước mỗi ví dụ, trừ khi phần thiết lập quy định thay đổi riêng. M4 đã bổ sung migration/seed và reset trạm demo có bảo vệ, được mô tả trong [thiết kế dữ liệu](../design/Database_Design.md). Các bài kiểm thử dùng database độc lập. Reset đầy đủ cho đơn/bản nháp sẽ được mở rộng cùng schema của các sprint sau theo FR-13.
 
 | Trường dữ liệu mẫu | Ý nghĩa/quy tắc bất biến |
 | --- | --- |
@@ -116,11 +116,25 @@ Yêu cầu: FR-06, BR-06, FR-11.
 
 **Cho trước** USER-A và ST-01/FAM_A/quantity 1. **Khi** biểu mẫu/hội thoại chuẩn bị bản nháp và hiển thị đề xuất nhưng người dùng chưa xác nhận. **Thì** tồn kho A khả dụng vẫn là sáu và chưa có đơn ACTIVE. Quy tắc này cũng áp dụng cho bản nháp bị bỏ dở.
 
+**AE-09a · Nội dung trước khi xác nhận.** Với đồng hồ máy chủ cố định, tạo nháp lúc 10:00 cho USER-A tại ST-01/FAM_A. Dùng cấu hình demo đề xuất ở mục 8 SRS (nháp 5 phút, giữ 15 phút). Biểu mẫu hiển thị mã/tên trạm ST-01, FAM_A, một pin, hạn xác nhận 10:05 và thời lượng giữ 15 phút. Lúc này kho A vẫn là 6, số đơn là 0. Nếu chưa từng xác nhận thành công, yêu cầu xác nhận mới đúng 10:05 bị từ chối vì nháp hết hạn. Kho vẫn là 6 và số đơn vẫn là 0.
+
 ### AE-10 — Xác nhận và giữ pin đúng một lần bằng thao tác nguyên tử
 
 Yêu cầu: FR-06, BR-07.
 
 **Cho trước** bản nháp hợp lệ của USER-A cho ST-01/FAM_A/quantity 1 và khóa chống xử lý trùng mới (idempotency key). **Khi** USER-A xác nhận. **Thì** tạo một đơn ACTIVE có mã đơn và thời hạn do máy chủ xác định, giảm tồn kho A từ sáu xuống năm; tồn kho B và số cổng sạc không đổi. Nếu trạng thái/dịch vụ/nhóm pin/tồn kho của trạm thay đổi trước xác nhận, phải từ chối mà không tạo đơn dang dở.
+
+**AE-10a · Trạm không đủ điều kiện.** Mỗi dòng là một ca độc lập cho FAM_A. Khi chọn trực tiếp trạm ở trạng thái dưới đây, thông báo lý do tương ứng. Để kiểm tra riêng bước xác nhận, dùng bản sao dữ liệu: cho trạm đủ điều kiện để tạo nháp rồi chuyển sang điều kiện trong bảng trước khi xác nhận. Đối chiếu số đơn và tồn kho ngay trước/sau lần xác nhận. Mọi ca đều có mức thay đổi bằng 0 đối với cả hai đại lượng.
+
+| Trạm mẫu | Điều kiện lúc xác nhận | Lý do người dùng cần thấy |
+|---|---|---|
+| ST-02 | Chỉ cung cấp dịch vụ sạc | Trạm chỉ sạc (`CHARGING_ONLY`) |
+| ST-04 | Chỉ đổi pin nhóm B | Không hỗ trợ FAM_A (`UNSUPPORTED_FAMILY`) |
+| ST-09 | Đóng cửa, kho A còn 4 | Trạm đang đóng (`STATION_CLOSED`) |
+| ST-13 | Bảo trì và kho A bằng 0 | Trạm đang bảo trì (`STATION_MAINTENANCE`) |
+| ST-05 | Đang mở, hỗ trợ A, kho A bằng 0 | Trạm đã hết pin A (`OUT_OF_STOCK`) |
+
+**AE-10b · Thời hạn giữ thực tế.** Dùng cùng cấu hình và thời điểm tạo nháp với AE-09a, khởi đầu lại với 6 pin A. Xác nhận thành công lúc 10:04. Biểu mẫu nhận mã đơn, trạng thái ACTIVE và hạn giữ 10:19 từ máy chủ. Lúc 10:05, nháp hết hiệu lực nhưng đơn vẫn ACTIVE và kho A còn 5. Khi chủ đơn truy cập đúng 10:19, đơn thành EXPIRED và kho A về 6. Đổi thời lượng giữ trong cấu hình của lần thử kế tiếp thì hạn của đơn mới dịch theo lượng tương ứng.
 
 ### AE-11 — Gửi lại sau khi mất phản hồi phải trả về cùng đơn
 
@@ -131,6 +145,8 @@ Yêu cầu: FR-07, FR-12, BR-08.
 **Trường hợp con — gửi lại khi bản nháp đã hết hạn:** Sau khi ghi nhận thành công nhưng mất phản hồi, đưa đồng hồ vượt quá hạn bản nháp và gửi lại cùng khóa/nội dung yêu cầu đã được xác thực quyền. Trả về đơn ban đầu/trạng thái hiện tại, không từ chối vì bản nháp cũ hết hạn. Đối soát việc hết hạn đơn theo BR-09 khi áp dụng; không tạo lượt giữ pin mới ngay cả khi điều kiện hợp lệ của trạm đã thay đổi.
 
 **Trường hợp con — gửi đồng thời cùng khóa:** Bắt đầu từ dữ liệu ban đầu, đồng thời gửi hai xác nhận giống nhau, đã được xác thực quyền, với cùng khóa/nội dung yêu cầu. Kết quả chỉ có đúng một đơn và một lượt giữ pin (sáu pin A còn năm). Cả hai kết quả sau khi xử lý xong đều chỉ đến đơn đó. Phản hồi tạm thời đang xử lý có thể yêu cầu thử lại cùng khóa; không được tạo thêm đơn.
+
+**AE-11a · Hai lần đặt độc lập của cùng người.** Với chính sách demo M1 đề xuất ở mục 8 SRS, USER-A lập hai nháp riêng cho ST-01/FAM_A, dùng hai khóa khác nhau khi cả hai nháp còn hiệu lực và kho ban đầu có 6 pin. Kết quả là hai mã đơn khác nhau ở trạng thái ACTIVE và kho còn 4. Gửi lại xác nhận thứ hai bằng chính khóa và nội dung cũ trả lại đơn thứ hai, kho vẫn còn 4. Ca này phụ thuộc vào chính sách giới hạn đơn được nhóm chọn.
 
 ### AE-12 — Nội dung thay đổi không được dùng lại khóa
 
@@ -228,7 +244,7 @@ Dùng các mốc quyết định ở mục 8 SRS cho chính sách/kích thước
 
 Yêu cầu: NFR-06, NFR-08.
 
-**Cho trước** bản có thể chạy được xây dựng sau này và bộ dữ liệu 18 bản ghi. **Khi** đo tìm kiếm phía máy chủ riêng với hoạt động Maps/LLM bên ngoài. **Thì** ghi môi trường, cỡ mẫu, trung vị/p95 và các lỗi. Dùng phương pháp đo và ngưỡng đã thống nhất qua mục 8 SRS; ghi đạt/không đạt theo các mục tiêu đó hoặc đang chờ nếu chưa thống nhất. Ghi độ bao phủ kiểm thử riêng theo chỉ số/phạm vi/phần loại trừ đã thống nhất; riêng ví dụ này không chứng minh độ bao phủ >=80%. Bộ yêu cầu không có độ trễ đã đo, cam kết 300 ms, kiểm thử đã triển khai hoặc kết quả độ bao phủ được khẳng định.
+**Cho trước** bản có thể chạy được và bộ dữ liệu 18 bản ghi. **Khi** đo tìm kiếm phía máy chủ riêng với hoạt động Maps/LLM bên ngoài. **Thì** ghi môi trường, cỡ mẫu, trung vị/p95 và các lỗi. Dùng phương pháp đo và ngưỡng đã thống nhất qua mục 8 SRS; ghi đạt/không đạt theo các mục tiêu đó hoặc đang chờ nếu chưa thống nhất. Ghi độ bao phủ kiểm thử riêng theo chỉ số/phạm vi/phần loại trừ đã thống nhất; riêng ví dụ này không chứng minh độ bao phủ >=80%. Số đo độ trễ, phạm vi độ bao phủ và kết quả thực thi hiện có nằm trong [báo cáo Sprint 1](../plans/1.3.4-sprint-1-review.md). Ngưỡng nghiệm thu định lượng tiếp tục chờ nhóm thống nhất.
 
 ## Rà soát và bàn giao để triển khai
 

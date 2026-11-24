@@ -1,6 +1,6 @@
 # Đặc tả yêu cầu phần mềm Vinergy
 
-Phiên bản 0.2. Cập nhật ngày 2 tháng 11 năm 2026. **Bản nháp — đang chờ nhóm rà soát.** Người phụ trách: M1; người rà soát đề xuất: M2, M4 và M7. Tài liệu mô tả hành vi mong đợi; không khẳng định các tính năng đã được triển khai, kiểm thử đã đạt hoặc việc rà soát đã hoàn tất.
+Phiên bản 0.4. Cập nhật ngày 24 tháng 11 năm 2026. **Bản nháp — đang chờ nhóm rà soát.** Người phụ trách: M1; người rà soát đề xuất: M2, M4 và M7. Tài liệu mô tả yêu cầu của ba sprint. Phần tìm kiếm Sprint 1 đã có bản triển khai local và bằng chứng kiểm thử trong [báo cáo Sprint 1](../plans/1.3.4-sprint-1-review.md). Hồ sơ rà soát M1 và các quyết định cần nhóm xác nhận nằm trong [M1_REVIEW.md](../plans/1.3.4-sprint-1-review.md).
 
 ## 1. Mục đích, phạm vi và cơ sở yêu cầu
 
@@ -82,7 +82,7 @@ stateDiagram-v2
     EXPIRED --> [*]
 ```
 
-Bản nháp là đối tượng riêng trước khi đặt, nằm ngoài sơ đồ này và không giữ pin. Không bao gồm trạng thái bàn giao pin thực tế/sạc pin. Thời gian giữ pin và thời hạn bản nháp được cấu hình phía máy chủ; giá trị đang chờ nhóm thống nhất. Gửi lại yêu cầu cho đơn đã hết hạn/đã hủy phải trả trạng thái kết thúc đó, không tạo đơn mới.
+Bản nháp là đối tượng riêng trước khi đặt, nằm ngoài sơ đồ này và không giữ pin. Không bao gồm trạng thái bàn giao pin thực tế/sạc pin. Máy chủ tính hạn bản nháp từ lúc tạo nháp và hạn giữ pin từ lúc ghi nhận xác nhận thành công. Mỗi hạn dùng thời lượng cấu hình riêng, có hiệu lực đến ngay trước thời điểm hết hạn. Cấu hình demo do M1 đề xuất ở mục 8. Gửi lại yêu cầu cho đơn đã hết hạn/đã hủy phải trả trạng thái kết thúc đó, không tạo đơn mới.
 
 ## 4. Yêu cầu chức năng
 
@@ -93,7 +93,7 @@ Bản nháp là đối tượng riêng trước khi đặt, nằm ngoài sơ đ�
 | FR-03 | Đồng bộ mã kết quả giữa danh sách và bản đồ; thay thế dấu trạm cũ, kể cả khi kết quả hợp lệ nhưng rỗng. | 1 |
 | FR-04 | Hiển thị dịch vụ, nhóm hỗ trợ, trạng thái, số lượng tài nguyên mô phỏng và khoảng cách; mở chỉ đường đến đúng tọa độ, không cam kết thời gian di chuyển. | 1 |
 | FR-05 | Thử nghiệm kỹ thuật gọi công cụ tìm kiếm bằng LLM trong phạm vi giới hạn, xử lý thiếu đầu vào và lỗi nhà cung cấp; ghi nhận kết quả, không xem đây là chatbot hoàn chỉnh. | 1 |
-| FR-06 | Chuẩn bị bản nháp không giữ pin, hiển thị trạm/nhóm/số lượng và yêu cầu xác nhận rõ ràng việc đặt một pin theo BR-05…BR-08. | 2 |
+| FR-06 | Trước khi xác nhận, biểu mẫu hiển thị mã/tên trạm, nhóm pin, số lượng 1, hạn xác nhận nháp và thời lượng sẽ giữ pin. Bản nháp giữ nguyên tồn kho. Sau khi máy chủ xác nhận thành công, hiển thị mã đơn, trạng thái và thời điểm hết giữ thực tế. Áp dụng BR-05…BR-08. | 2 |
 | FR-07 | Chỉ xem các đơn thuộc quyền của mình; gửi lại yêu cầu phải giữ nguyên danh tính đơn gốc. | 2 |
 | FR-08 | Hủy đơn đang hoạt động thuộc sở hữu của mình và hoàn pin một lần. | 2 |
 | FR-09 | Xử lý hết hạn theo thời gian máy chủ, cung cấp trạng thái hiện tại và bảo toàn tồn kho khi hủy/xử lý hết hạn chạy đua. | 2 |
@@ -156,7 +156,7 @@ Các đặc tả chín trường sau mô tả hành vi; chưa phải địa ch�
 
 ## 6. Bản nháp ý nghĩa dữ liệu
 
-M2/M4 rà soát tên trường, cách truyền dữ liệu/mã hóa lỗi và hợp đồng cuối cùng trong 1.1.2/2.1.3. Các trường này giúp tài liệu/ví dụ thống nhất; chưa chốt một HTTP API.
+M2/M4 rà soát tên trường, cách truyền dữ liệu/mã hóa lỗi và hợp đồng cuối cùng trong 1.1.2/2.1.3. Các trường này giúp tài liệu/ví dụ thống nhất. Hợp đồng HTTP tìm kiếm/chi tiết v1 đã triển khai được ghi tại [hợp đồng API v1](../architecture/api_contracts.md); hợp đồng đặt pin tiếp tục được thiết kế trong 2.1.3.
 
 | Đầu vào/ngữ cảnh | Ý nghĩa |
 | --- | --- |
@@ -203,8 +203,8 @@ Bảo mật, quyền riêng tư, thao tác bằng bàn phím, nhãn và thông b
 
 | Quyết định | Cách xử lý hiện tại | Người phụ trách rà soát | Mốc chốt / WBS |
 | --- | --- | --- | --- |
-| Mỗi người chỉ có một đơn hoạt động | Còn mở, chưa phải giới hạn cơ sở. Các bản nháp riêng có thể tạo đơn riêng; một bản nháp không bao giờ tạo nhiều đơn. | M1/M2 | Trong 2.1.1; trước triển khai đặt pin 2.2.1 |
-| Thời gian giữ pin/thời hạn bản nháp | Giá trị có thể cấu hình; không tự đặt thời lượng tùy ý. | M1/M2/M4 | Trong 2.1.1/2.1.3; trước 2.2.1 và kiểm thử hết hạn |
+| Mỗi người chỉ có một đơn hoạt động | Đề xuất M1 cho demo 2.1.1: cho phép nhiều đơn ACTIVE của một người khi từng bản nháp riêng đều hợp lệ và còn tồn kho. Mỗi nháp vẫn chỉ tạo được một đơn. Chờ xác nhận của M1/M2. | M1/M2 | Trong 2.1.1; trước triển khai đặt pin 2.2.1 |
+| Thời gian giữ pin/thời hạn bản nháp | Đề xuất M1 cho demo 2.1.1: giữ pin 15 phút kể từ khi xác nhận thành công, nháp có hiệu lực 5 phút từ khi tạo. Hai giá trị cấu hình độc lập ở máy chủ. Ví dụ AE-09a, AE-10b dùng hai mốc này để M3 và M7 đối chiếu. Chờ xác nhận của M1/M2/M4. | M1/M2/M4 | Trong 2.1.1/2.1.3; trước 2.2.1 và kiểm thử hết hạn |
 | Lịch xử lý hết hạn và phục hồi | Thống nhất chu kỳ tác vụ, độ trễ hoàn pin tối đa và phục hồi khi tiến trình nền lỗi; giữ BR-09 khi đọc/hủy. | M2/M6/M7 | Trong 2.1.3; trước 2.2.5 và nghiệm thu 2.3.2 |
 | Nhà cung cấp/mô hình, hạn mức/ngân sách/giới hạn gọi | Thống nhất cấu hình thử nghiệm kỹ thuật, sau đó xác nhận giới hạn chatbot cuối cùng; tài liệu này không thực hiện thiết lập có trả phí. | M2/M6 | Cấu hình thử nghiệm trước 1.3.2; giới hạn cuối cùng trước 3.1.3 |
 | Lỗi API/phiên demo | Định nghĩa tạo phiên, danh tính, hết hạn/phục hồi và biện pháp bảo vệ; quy định cách truyền lỗi theo ý nghĩa, gồm gửi lại khi đang xử lý. | M2/M4 | Hợp đồng ban đầu trong 1.1.2; hợp đồng đặt pin trong 2.1.3 trước 2.2.1 |
