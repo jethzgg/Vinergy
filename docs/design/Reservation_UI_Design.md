@@ -24,3 +24,51 @@ Thiết kế tuân thủ ngôn ngữ hình ảnh đã thiết lập ở WBS 1.2.
 
 ---
 
+## 2. Luồng tương tác & Chuyển trạng thái
+
+### 2.1. Luồng tổng thể: Chuẩn bị bản nháp → Xác nhận → Xem / Hủy / Hết hạn
+
+```mermaid
+flowchart TD
+    Start["Chọn trạm đổi pin đủ điều kiện<br/>(từ DetailDrawer 1.2.1 hoặc 'Trạm gần nhất')"] --> CreateDraft["POST /api/v1/reservation-drafts<br/>{ station_id | nearest, family_code, quantity: 1 }"]
+    CreateDraft -->|401 SESSION_REQUIRED/EXPIRED| AuthPrompt["Nhắc chọn / khôi phục phiên demo"]
+    CreateDraft -->|409 NO_ELIGIBLE_STATION / STATION_NOT_ELIGIBLE| DraftReject["Hiển thị lý do không khả dụng<br/>(0 tồn kho bị thay đổi)"]
+    CreateDraft -->|201 DraftCreated| ConfirmUI["Màn hình Xác nhận bản nháp<br/>• Trạm, khu vực, khoảng cách<br/>• Nhóm pin (FAM_A/FAM_B)<br/>• Số lượng cố định: 1 pin<br/>• Hạn bản nháp (đếm ngược)<br/>• Nhãn: Bản nháp chưa giữ tồn kho"]
+
+    ConfirmUI -->|Đóng / Quay lại| Abandon["Bỏ bản nháp<br/>(tồn kho không đổi — AE-09)"]
+    ConfirmUI -->|Nhấn 'Xác nhận đặt 1 pin'| ConfirmReq["POST /api/v1/reservations<br/>Header: Idempotency-Key = K (UUID)<br/>{ draft_id, station_id, family_code, quantity: 1 }"]
+
+    ConfirmReq -->|201 Created / 200 Idempotent-Replayed| OrderDetail["Màn hình Chi tiết đơn (ACTIVE)<br/>• reservation_id, trạng thái ACTIVE<br/>• Hạn giữ pin (expires_at)<br/>• Tồn kho trạm giảm đúng 1"]
+    ConfirmReq -->|409 STATION_NOT_ELIGIBLE| StockErr["Lỗi tồn kho/trạng thái lúc xác nhận<br/>• Gợi ý chọn trạm gần nhất khác"]
+    ConfirmReq -->|409 DRAFT_STALE / DRAFT_ALREADY_USED| DraftErr["Bản nháp hết hạn / đã dùng<br/>• Nút 'Tạo bản nháp mới'"]
+    ConfirmReq -->|409 IDEMPOTENCY_KEY_REUSED| KeyErr["Xung đột khóa chống lặp<br/>• Yêu cầu tạo bản nháp & khóa mới"]
+    ConfirmReq -->|409 REQUEST_IN_PROGRESS hoặc Mất phản hồi mạng| UnknownUI["Trạng thái CHƯA RÕ KẾT QUẢ (FR-12)<br/>• Giữ nguyên khóa K<br/>• Nút 'Đối soát bằng khóa cũ'<br/>• Nút 'Kiểm tra Đơn của tôi'"]
+    UnknownUI -->|Gửi lại cùng khóa K| ConfirmReq
+
+    OrderDetail -->|Hủy đơn trước expires_at| CancelDlg["Hộp thoại Xác nhận hủy"]
+    CancelDlg -->|Xác nhận hủy| CancelReq["POST /api/v1/reservations/:id/cancel"]
+    CancelReq -->|200 CANCELLED| CancelledState["Trạng thái CANCELLED<br/>Hoàn pin đúng 1 lần (AE-15)"]
+    CancelReq -->|200 EXPIRED (BR-09)| ExpiredState["Trạng thái EXPIRED<br/>Đơn đã quá hạn trước khi hủy (AE-16b)"]
+    OrderDetail -->|server_time >= expires_at & làm mới| ExpiredState
+```
+
+### 2.2. Máy trạng thái màn hình Xác nhận bản nháp
+
+```mermaid
+stateDiagram-v2
+    [*] --> CreatingDraft: Nhấn Đặt 1 pin / Trạm gần nhất
+    CreatingDraft --> ReadyToConfirm: 201 Draft trả về
+    CreatingDraft --> DraftError: 400 / 401 / 409 / 500
+    ReadyToConfirm --> DraftExpiredLocal: Đếm ngược về 00:00
+    DraftExpiredLocal --> CreatingDraft: Tạo bản nháp mới
+    ReadyToConfirm --> Submitting: Nhấn Xác nhận đặt 1 pin (sinh khóa K)
+    Submitting --> Confirmed: 201 Created hoặc 200 Replay
+    Submitting --> ConfirmError: 400 / 401 / 404 / 409 (trừ IN_PROGRESS) / 500
+    Submitting --> UnknownOutcome: Mất phản hồi mạng / 409 REQUEST_IN_PROGRESS
+    UnknownOutcome --> Submitting: Đối soát (gửi lại đúng khóa K)
+    ConfirmError --> CreatingDraft: Tạo bản nháp mới / Tìm trạm khác
+    Confirmed --> [*]: Chuyển sang Chi tiết đơn
+```
+
+---
+
