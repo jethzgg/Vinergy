@@ -72,3 +72,104 @@ stateDiagram-v2
 
 ---
 
+## 3. Wireframe các màn hình chính
+
+### 3.1. Màn hình A — Hộp thoại Xác nhận đặt pin (`ConfirmDraftModal`)
+
+Hiển thị dạng modal dialog ở giữa màn hình trên desktop (`max-w-lg`) và bottom-sheet/full-width dialog trên mobile (`320px+`). Tập trung tối đa vào 4 thông tin bắt buộc trước khi xác nhận: **trạm, nhóm pin, số lượng (`1`) và thời hạn**.
+
+```text
++-----------------------------------------------------------------------+
+|  XÁC NHẬN ĐẶT PIN                                              [ X ]  |
+|  Dữ liệu mô phỏng — việc đặt pin không có hiệu lực tại trạm thực tế.  |
++-----------------------------------------------------------------------+
+|  [i] Bản nháp chưa giữ tồn kho. Pin chỉ được giữ khi bạn nhấn         |
+|      "Xác nhận đặt 1 pin".                                            |
++-----------------------------------------------------------------------+
+|  TRẠM ĐỔI PIN                                                         |
+|  ST-01 · Vinergy Demo Station 01                         [ Đang mở ]  |
+|  Hai Ba Trung demo area · 0.0 km đường thẳng                          |
+|  Tồn kho hiện tại (FAM_A): 6 pin khả dụng                             |
++-----------------------------------------------------------------------+
+|  NHÓM PIN                |  SỐ LƯỢNG (BR-05)                          |
+|  FAM_A                   |  1 pin (cố định)                           |
+|  Fictional family A      |  Chỉ cho phép đặt đúng 1 pin mỗi đơn       |
++-----------------------------------------------------------------------+
+|  THỜI HẠN BẢN NHÁP (BR-06)                    HẠN GIỮ PIN DỰ KIẾN     |
+|  Còn 04:52 (hết hạn lúc 18:35:00 UTC)         Tính từ lúc máy chủ     |
+|  [=============-------]                       xác nhận thành công     |
++-----------------------------------------------------------------------+
+|  Mã bản nháp (UUID): 9a7e3c52-1f4b-4d8a-b6c2-0e5f7a9b1d34 · Phiên: USER-A |
+|  Khóa chống lặp (Idempotency-Key): 8b2f6c1a-3d4e-4f5a-9b6c-7d8e9f0a1b2c  |
++-----------------------------------------------------------------------+
+|  [ Quay lại ]                              [ Xác nhận đặt 1 pin ]     |
++-----------------------------------------------------------------------+
+```
+
+**Hành vi bắt buộc trên Màn hình A:**
+- Trường `quantity` hiển thị rõ là **`1 pin`** ở dạng chỉ đọc (không có stepper `+`/`-` để tránh vi phạm BR-05; nếu gọi API bằng dữ liệu sai ở tầng kiểm thử, lỗi `400 INVALID_INPUT` vẫn được render rõ).
+- Khi đồng hồ đếm ngược bản nháp về `00:00`, hiển thị cảnh báo `warn`: *"Bản nháp đã hết hiệu lực theo đồng hồ. Nhấn 'Tạo bản nháp mới' để kiểm tra lại tồn kho."* và vô hiệu hóa nút xác nhận.
+- Nhấn `Xác nhận đặt 1 pin` khóa nút (hiện spinner + *"Đang xác nhận nguyên tử…"*), giữ nguyên `Idempotency-Key` trong suốt vòng đời lần xác nhận đó.
+
+### 3.2. Màn hình B — Đơn của tôi & Chi tiết đơn (`OrderList` + `OrderDetailPanel`)
+
+Bố cục 2 cột trên desktop (`>= 1024px`: danh sách bên trái `380px`, chi tiết bên phải) và xếp dọc / chuyển chi tiết trên mobile (`320px–768px`).
+
+```text
++---------------------------------------------------------------------------------------+
+|  VIBERGY / VINERGY   [ Tìm trạm ]  [ Đơn của tôi (1) ]       Phiên: [ USER-A v ]      |
+|  [i] Dữ liệu mô phỏng — việc đặt pin không có hiệu lực tại các trạm thực tế.          |
++---------------------------------------------------------------------------------------+
+|  ĐƠN CỦA TÔI (USER-A)                  |  CHI TIẾT ĐƠN · res_01JCXZ...                |
+|  [ Tất cả (3) ] [ Đang giữ (1) ]       |  +-----------------------------------------+ |
+|  [ Đã hủy (1) ] [ Hết hạn (1) ]        |  | [● ĐANG GIỮ PIN (ACTIVE)]               | |
+|                                        |  | Hết hạn sau: 14:28 (18:45:00 UTC)       | |
+|  +----------------------------------+  |  | [==================-----]               | |
+|  | res_01JCXZ...      [ Đang giữ ]  |  |  +-----------------------------------------+ |
+|  | ST-01 · Station 01               |  |                                              |
+|  | FAM_A · 1 pin · Còn 14:28        |  |  Trạm đổi pin: ST-01 · Vinergy Demo 01       |
+|  +----------------------------------+  |  Khu vực:      Hai Ba Trung demo area        |
+|                                        |  Nhóm pin:     FAM_A (Fictional family A)    |
+|  +----------------------------------+  |  Số lượng:     1 pin                         |
+|  | res_01J9AB...       [ Đã hủy ]   |  |  Chủ sở hữu:   USER-A (từ phiên máy chủ)     |
+|  | ST-03 · Station 03               |  |  Tạo lúc:      2026-11-25T18:30:00Z          |
+|  | FAM_A · 1 pin · Hủy lúc 18:12    |  |  Hết hạn lúc:  2026-11-25T18:45:00Z          |
+|  +----------------------------------+  |                                              |
+|                                        |  [ Làm mới từ máy chủ ] [ Chỉ đường (Maps) ] |
+|  +----------------------------------+  |  [ Hủy đơn này ]  (chỉ hiện khi ACTIVE)      |
+|  | res_01J8XY...       [ Hết hạn ]  |  +----------------------------------------------+
+|  | ST-06 · Station 06               |
+|  | FAM_A · 1 pin · Quá hạn 17:50    |
+|  +----------------------------------+
++---------------------------------------------------------------------------------------+
+```
+
+**Hành vi bắt buộc trên Màn hình B:**
+- Chỉ hiển thị đơn thuộc phiên hiện tại (`USER-A` hoặc `USER-B`). Khi đổi sang `USER-B`, danh sách được tải lại theo phiên mới; thử truy cập mã đơn của `USER-A` trả `404 RESERVATION_NOT_FOUND` (không lộ dữ liệu, AE-14).
+- Nếu đơn `ACTIVE` đã vượt quá `expires_at`, thao tác tải danh sách / làm mới / hủy sẽ đối soát phía máy chủ và cập nhật giao diện sang `EXPIRED` (BR-09).
+- Nút `Chỉ đường (Maps)` mở Google Maps URL với tọa độ `coordinates` của trạm, không cam kết thời gian di chuyển (FR-04).
+- Khi danh sách trống: hiển thị empty state rõ ràng (*"Chưa có đơn đặt pin nào trong phiên USER-A"*) kèm nút tạo bản nháp mới, tách biệt hoàn toàn với trạng thái lỗi API.
+
+### 3.3. Màn hình C — Hộp thoại Xác nhận hủy đơn (`CancelOrderDialog`)
+
+```text
++-----------------------------------------------------------------------+
+|  HỦY ĐƠN ĐẶT PIN?                                              [ X ]  |
++-----------------------------------------------------------------------+
+|  Bạn sắp hủy lượt giữ 1 pin FAM_A tại ST-01 · Vinergy Demo Station 01 |
+|  (Mã đơn: res_01JCXZ...).                                             |
+|                                                                       |
+|  • Thao tác này không thể hoàn tác.                                   |
+|  • 1 pin sẽ được hoàn lại tồn kho khả dụng của trạm đúng một lần      |
+|    (nếu đơn chưa hết hạn tại thời điểm máy chủ xử lý).                |
++-----------------------------------------------------------------------+
+|  [ Giữ lại đơn ]                                [ Xác nhận hủy đơn ]  |
++-----------------------------------------------------------------------+
+```
+
+**Phản hồi sau khi hủy (BR-09, AE-15, AE-16):**
+- Nếu máy chủ trả `status: "CANCELLED"`: hiện banner thông báo *"Đã hủy đơn và hoàn lại 1 pin FAM_A vào tồn kho ST-01."* và làm mới tồn kho trạm.
+- Nếu máy chủ trả `status: "EXPIRED"` (do đơn hết hạn ngay trước/tại thời điểm hủy — AE-16b): hiện banner cảnh báo `warn` *"Đơn đã hết hạn theo giờ máy chủ trước khi hủy. Trạng thái được cập nhật thành Hết hạn và pin đã được hoàn lại đúng một lần."* — **không** báo hủy thành công sai lệch.
+
+---
+
