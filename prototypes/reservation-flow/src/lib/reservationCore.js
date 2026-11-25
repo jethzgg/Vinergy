@@ -217,7 +217,7 @@ export function setHoldMinutes(store, minutes) {
 }
 
 /** Project internal draft record to §6.3 API shape (status & available_batteries computed on read). */
-function projectDraft(store, record) {
+function projectDraft(store, record, distanceKm = null) {
   const station = store.stations.find((s) => s.station_id === record.station_id)
   const status = record.reservation_id
     ? 'USED'
@@ -234,8 +234,8 @@ function projectDraft(store, record) {
       name: station?.name ?? record.station_name,
       area_label: station?.area_label ?? record.area_label,
       coordinates: structuredClone(station?.coordinates ?? record.coordinates),
-      distance_km: record.distance_km,
-      distance_display: record.distance_display,
+      distance_km: distanceKm,
+      distance_display: distanceKm === null ? null : formatDistance(distanceKm),
     },
     family_code: record.family_code,
     quantity: record.quantity,
@@ -443,8 +443,6 @@ export function createDraft(store, session, body) {
     station_name: selectedStation.name,
     area_label: selectedStation.area_label,
     coordinates: { ...selectedStation.coordinates },
-    distance_km: distanceKm,
-    distance_display: distanceKm === null ? null : formatDistance(distanceKm),
     family_code: body.family_code,
     quantity: 1,
     hold_minutes: store.config.holdMinutes,
@@ -462,7 +460,7 @@ export function createDraft(store, session, body) {
     headers: { 'Cache-Control': 'no-store' },
     body: {
       is_simulated: true,
-      draft: projectDraft(store, record),
+      draft: projectDraft(store, record, distanceKm),
       request_id: makeRequestId(),
     },
   }

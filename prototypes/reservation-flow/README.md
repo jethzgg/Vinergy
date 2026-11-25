@@ -22,6 +22,8 @@ Other scripts:
 
 ```bash
 npm run check:oracle # assert reservation domain rules & API v2.2 contract (15 checks)
+npx playwright install chromium  # one-time browser setup for the regression test
+npm run test:e2e     # lost response, same-key retry, one order and one stock hold
 npm run build        # production bundle into dist/
 npm run preview      # serve the built bundle
 ```

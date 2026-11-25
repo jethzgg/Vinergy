@@ -296,6 +296,12 @@ check('AE-18 nearest eligible from ST-05 picks ST-03 (1.2 km) and respects radiu
   assert.equal(nearest.body.draft.station.station_id, 'ST-03')
   assert.equal(nearest.body.draft.station.distance_display, '1.2 km')
 
+  const reloaded = getDraftDetail(store, sessionA, nearest.body.draft.draft_id)
+  assert.equal(reloaded.status, 200)
+  assert.equal(reloaded.body.draft.station.station_id, 'ST-03')
+  assert.equal(reloaded.body.draft.station.distance_km, null)
+  assert.equal(reloaded.body.draft.station.distance_display, null)
+
   const tooTight = createDraft(store, sessionA, {
     family_code: 'FAM_A',
     quantity: 1,

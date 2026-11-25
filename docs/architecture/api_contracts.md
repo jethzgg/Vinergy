@@ -640,7 +640,7 @@ Validator gom toàn bộ lỗi như §1.2. Thứ tự `details`: path, header, s
 | --- | --- | --- |
 | `draft_id` | string (UUID) | |
 | `status` | `OPEN` \| `USED` \| `EXPIRED` | Suy ra lúc đọc ([Reservation_Design.md §3.2](../design/Reservation_Design.md#32-bản-nháp)) |
-| `station` | object | `station_id`, `name`, `area_label`, `coordinates`, `distance_km`, `distance_display`. Khoảng cách là `null` nếu bản nháp tạo bằng `station_id`. |
+| `station` | object | `station_id`, `name`, `area_label`, `coordinates`, `distance_km`, `distance_display`. Hai trường khoảng cách chỉ có giá trị trong phản hồi tạo nháp bằng `nearest`. Khi tạo bằng `station_id` hoặc đọc lại bằng `GET`, cả hai là `null`. |
 | `family_code` | string | |
 | `quantity` | integer | Luôn `1` |
 | `available_batteries` | integer \| null | Tồn kho **hiện tại** của nhóm tại trạm lúc đọc. Chỉ để hiển thị, **không được giữ**. |
@@ -706,7 +706,7 @@ ST-05 đứng đầu tìm kiếm ở 0.0 km nhưng hết pin A, nên không đư
 
 ### 6.5. `GET /api/v1/reservation-drafts/{draft_id}`
 
-Trả `200` với cùng cấu trúc §6.4, `status` và `available_batteries` tính lại lúc đọc. Không có, hoặc của người khác: `404 DRAFT_NOT_FOUND`.
+Trả `200` với cùng cấu trúc §6.4, `status` và `available_batteries` tính lại lúc đọc. Trạm đã chọn giữ nguyên. Máy chủ không lưu vị trí xuất phát hay khoảng cách của lần tìm ban đầu, nên `station.distance_km` và `station.distance_display` đều là `null`. Không có, hoặc của người khác: `404 DRAFT_NOT_FOUND`.
 
 ### 6.6. Đối tượng `reservation`
 
@@ -738,7 +738,7 @@ Thứ tự xử lý (sau §1.3 bước 1–5):
 4. Bản nháp đã tạo đơn (với khóa khác) → `409 DRAFT_ALREADY_USED` (AE-17).
 5. Body lệch `station_id`/`family_code`/`quantity` của bản nháp → `409 DRAFT_STALE`, `reason: CONTENT_MISMATCH`.
 6. Bản nháp hết hạn → `409 DRAFT_STALE`, `reason: DRAFT_EXPIRED`.
-7. Trạm không `OPEN` hoặc hết pin → `409 STATION_NOT_ELIGIBLE` với `reason` `STATION_CLOSED` \| `STATION_MAINTENANCE` \| `OUT_OF_STOCK` (AE-10, AE-13).
+7. Đánh giá lại điều kiện đặt theo đúng thứ tự §4.2. Nếu trạm không đủ điều kiện, trả `409 STATION_NOT_ELIGIBLE` với lý do đầu tiên trong `CHARGING_ONLY`, `UNSUPPORTED_FAMILY`, `STATION_CLOSED`, `STATION_MAINTENANCE`, `OUT_OF_STOCK` (AE-10a, AE-13).
 8. Còn lại: trừ 1 pin, tạo đơn `ACTIVE`, `201 Created`, header `Location: /api/v1/reservations/{reservation_id}`.
 
 Yêu cầu bị từ chối không lưu gì: có thể thử lại cùng khóa sau khi sửa nguyên nhân. Nếu một yêu cầu cùng khóa đang xử lý quá `IDEMPOTENCY_LOCK_TIMEOUT_MS`, trả `409 REQUEST_IN_PROGRESS` kèm `Retry-After: 1`; client gửi lại **cùng khóa, cùng body**.
@@ -826,9 +826,9 @@ Bổ sung vào bảng §2.2. Mỗi mã gắn một HTTP status.
 
 ### 6.12. Thay đổi phía client so với bản tạm rev 2
 
-Bản tạm rev 2 chỉ giữ chỗ tên endpoint và mã lỗi, chưa định nghĩa phản hồi. Prototype 2.1.2 (`prototypes/reservation-flow/`) dựng theo bản đó, nên khi nối API thật phải đổi các điểm dưới đây. Hai dòng đầu làm sai kết quả xác nhận hoặc thông tin người dùng thấy trước khi đặt, nên cần sửa trước.
+Bảng dưới đây đối chiếu prototype ban đầu với hợp đồng mà frontend và backend dùng khi tích hợp. Nó bao gồm các thay đổi về xác nhận, gửi lại và thời gian giữ pin đã áp dụng vào prototype 2.1.2.
 
-| # | Chỗ | Bản tạm rev 2 / prototype | Hợp đồng v2.1 |
+| # | Chỗ | Prototype ban đầu (rev 2) | Hợp đồng hiện tại |
 | --- | --- | --- | --- |
 | 1 | Body `POST /reservations` | `{ draft_id, draft_revision, quantity }` | `{ draft_id, station_id, family_code, quantity }`, lấy từ `draft.station.station_id` và `draft.family_code` của bản nháp người dùng đang xem. Gửi `draft_revision` nhận `400 UNKNOWN_FIELD`; thiếu `station_id`/`family_code` nhận `400 REQUIRED`. |
 | 2 | Gửi lại sau khi mất phản hồi | Dựng lại body từ trạng thái màn hình | Gửi **đúng body đã gửi lần đầu** cùng `Idempotency-Key`. Client lưu body cùng với khóa. Server so `request_hash` trên cả 4 trường (thứ tự khóa JSON không quan trọng); lệch bất kỳ trường nào nhận `409 IDEMPOTENCY_KEY_REUSED` thay vì đơn gốc. |
@@ -836,7 +836,7 @@ Bản tạm rev 2 chỉ giữ chỗ tên endpoint và mã lỗi, chưa định n
 | 4 | Thông tin trạm | `station_id`, `station_name`, `area_label`, `coordinates` phẳng trong `draft`/`reservation` | Lồng trong `draft.station` (§6.3) và `reservation.station` (§6.6). Tên trạm là `station.name`. |
 | 5 | Tồn kho hiển thị | `draft.available_batteries_snapshot` | `draft.available_batteries`, tính lại mỗi lần đọc, không được giữ |
 | 6 | Trường không có trong hợp đồng | `draft_revision`, `user_id`, `opening_status`, `used_by_reservation_id` trong `draft`; `user_id` trong `reservation` | Dùng `draft.status` và `draft.reservation_id`. Chủ đơn luôn là người dùng của phiên hiện tại, nên không trả `user_id`. |
-| 7 | Body `POST /reservation-drafts` | Kèm `origin` khi chọn trạm bằng `station_id` | Không có `origin`; gửi lên nhận `400 UNKNOWN_FIELD`. Khoảng cách chỉ có khi dùng `nearest`; với `station_id`, `distance_km` là `null`. |
+| 7 | Body `POST /reservation-drafts` | Kèm `origin` khi chọn trạm bằng `station_id` | Không có `origin`; gửi lên nhận `400 UNKNOWN_FIELD`. Khoảng cách chỉ có trong phản hồi tạo nháp bằng `nearest`; với `station_id`, `distance_km` là `null`. |
 | 8 | Phản hồi hủy | Có thêm `released_stock`, `reconciled_from_expiry` | Chỉ có `reservation`. Kết quả đọc từ `reservation.status`: `CANCELLED` là đã hủy và hoàn pin, `EXPIRED` là đơn đã hết hạn trước khi hủy (§6.10). |
 | 9 | `409 REQUEST_IN_PROGRESS` | `retry_after_seconds` trong body | Header `Retry-After` (giây) |
 | 10 | `409 DRAFT_STALE` | Không phân biệt nguyên nhân | `details[0].reason` là `DRAFT_EXPIRED` hoặc `CONTENT_MISMATCH` |

@@ -157,6 +157,8 @@ def create_seeded_sqlite() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        variant = MIGRATIONS_DIR / "sqlite" / migration.name
+        migration = variant if variant.exists() else migration
         conn.executescript(migration.read_text(encoding="utf-8"))
     conn.executescript(SEED_SQL.read_text(encoding="utf-8"))
     return conn

@@ -20,7 +20,7 @@ Các giá trị đánh dấu **(đề xuất M1, SRS §8)** lấy từ 2.1.1 (24
 | D-06 | Thời gian quyết định hủy hay hết hạn là `Clock.now()` của server, lấy **một lần** ở đầu giao dịch và truyền vào SQL. Không dùng `now()` của DB trong logic nghiệp vụ. | Đồng hồ điều khiển được trong test (AE-16), và CHECK của bảng `reservation` dùng cùng mốc. | AD-07, BR-09 |
 | D-07 | CSRF token **suy ra** từ session id: `HMAC(SESSION_SECRET, "csrf:" + raw_sid)`. Không thêm cột. | Bảng `user_session` v0 đủ dùng, và `GET /demo-session` luôn trả lại được token. | AD-04 |
 | D-08 | Không giới hạn số đơn `ACTIVE` mỗi người: mỗi bản nháp hợp lệ, còn tồn kho tạo được một đơn riêng. Giữ sẵn cấu hình và mã lỗi nếu nhóm đổi chính sách. | Đề xuất M1 ở 2.1.1 (SRS §8), chờ M1/M2 xác nhận. | AE-08, AE-11, AE-11a |
-| D-09 | **Không cần migration mới.** Lược đồ `001_initial_schema.sql` đã có mọi bảng, khóa và CHECK cần cho Sprint 2. | Xem §5. | — |
+| D-09 | Bản nháp tham chiếu trạm và nhóm pin riêng. Giao dịch xác nhận đánh giá lại điều kiện đổi pin trước khi trừ kho. | Giữ lịch sử bản nháp khi trạm đổi dịch vụ hoặc ngừng hỗ trợ một nhóm pin. | AE-10a, §5 và §8.4 |
 
 ---
 
@@ -167,12 +167,12 @@ Dùng `404` thay cho `403` để không lộ sự tồn tại của đơn (AE-14
 
 ### 5.1 Kết luận rà soát
 
-Lược đồ v0 (`001_initial_schema.sql`, 1.1.3) được rà soát lại theo từng quy tắc Sprint 2. **Không cần thay đổi cấu trúc**:
+Các ràng buộc dữ liệu và kiểm tra giao dịch của Sprint 2 được đối chiếu với từng quy tắc trong bảng dưới đây.
 
 | Nhu cầu Sprint 2 | Đáp ứng bởi |
 | --- | --- |
 | Đúng một pin mỗi đơn (BR-05) | `ck_draft_quantity CHECK (quantity = 1)`; đơn lấy số lượng qua bản nháp |
-| Bản nháp chỉ ở trạm `SWAPPING` hỗ trợ đúng nhóm (BR-02, BR-03) | `fk_draft_battery_stock (station_id, family_code) → station_battery_stock` |
+| Bản nháp ghi nhận trạm và nhóm pin đã chọn (BR-02, BR-03, AE-10a) | Khóa ngoại tới `station` và `battery_family`. Kiểm tra điều kiện đổi pin khi tạo nháp và kiểm tra lại khi xác nhận. |
 | Bản nháp bất biến, chỉ tạo một đơn (BR-06, D-01) | Không có cột cập nhật được; `uq_reservation_draft UNIQUE (draft_id)` |
 | Tồn kho không âm (NFR-01, AE-13) | `ck_battery_stock_nonneg` + `UPDATE … WHERE available_batteries >= 1` |
 | Idempotency theo người dùng, thao tác, khóa (BR-08) | `pk_idempotency_record (user_id, operation, idempotency_key)`, `request_hash CHAR(64)` |
@@ -196,7 +196,8 @@ erDiagram
     STATION ||--o{ STATION_CHARGING_PORT : "có"
     APP_USER ||--o{ USER_SESSION : "đăng nhập"
     APP_USER ||--o{ RESERVATION_DRAFT : "chuẩn bị"
-    STATION_BATTERY_STOCK ||--o{ RESERVATION_DRAFT : "nhắm tới"
+    STATION ||--o{ RESERVATION_DRAFT : "trạm đã chọn"
+    BATTERY_FAMILY ||--o{ RESERVATION_DRAFT : "nhóm đã chọn"
     RESERVATION_DRAFT ||--o| RESERVATION : "xác nhận thành"
     APP_USER ||--o{ IDEMPOTENCY_RECORD : "sở hữu khóa"
     RESERVATION ||--|| IDEMPOTENCY_RECORD : "kết quả của"
@@ -285,9 +286,12 @@ SELECT 1 FROM reservation WHERE draft_id = :draft;
 --   body lệch station/family/quantity → 409 DRAFT_STALE (CONTENT_MISMATCH)
 --   :now >= expires_at                → 409 DRAFT_STALE (DRAFT_EXPIRED)
 
--- (4) Trạng thái trạm không được đổi giữa chừng
+-- (4) Khóa trạng thái trạm và tồn kho theo thứ tự cố định
 SELECT opening_status FROM station WHERE station_id = :station FOR SHARE;
---   CLOSED / MAINTENANCE              → 409 STATION_NOT_ELIGIBLE
+SELECT family_code, available_batteries FROM station_battery_stock
+ WHERE station_id = :station ORDER BY family_code FOR UPDATE;
+-- Đánh giá booking_eligibility với dịch vụ, nhóm, trạng thái và số lượng hiện tại (§4.2 API).
+-- Nếu không đủ điều kiện, trả 409 STATION_NOT_ELIGIBLE với lý do tương ứng.
 
 -- (5) Trừ đúng một pin, chỉ khi còn
 UPDATE station_battery_stock SET available_batteries = available_batteries - 1
@@ -304,9 +308,7 @@ COMMIT;                                                            -- 201 Create
 
 Mọi nhánh lỗi là `ROLLBACK`, nên request bị từ chối không đổi tồn kho, đơn hay bản ghi khóa (BR-07). Bước (2) đứng trước (3)–(5) để gửi lại sau khi mất phản hồi vẫn nhận đơn gốc dù bản nháp đã hết hạn hoặc trạm đã hết pin (AE-11).
 
-**Không cần kiểm tra `SWAPPING`/nhóm pin lúc xác nhận:** khóa ngoại `fk_draft_battery_stock` bảo đảm dòng tồn kho tồn tại suốt đời bản nháp; muốn bỏ hỗ trợ một nhóm thì phải xóa bản nháp trước (chỉ xảy ra khi reset).
-
-**AE-10a ở bước xác nhận.** Ba dòng `STATION_CLOSED`, `STATION_MAINTENANCE`, `OUT_OF_STOCK` kiểm tra được đúng như AE-10a mô tả: tạo nháp khi trạm đủ điều kiện, đổi trạng thái/tồn kho, rồi xác nhận (bước 4–5). Hai dòng `CHARGING_ONLY` và `UNSUPPORTED_FAMILY` thì **không dựng được** theo cách đó: lệnh bỏ dịch vụ đổi pin hoặc bỏ hỗ trợ FAM_A của một trạm đang có bản nháp bị DB từ chối (`ForeignKeyViolation`). Vì vậy kết quả nghiệm thu của hai dòng này ở bước xác nhận là "thay đổi bị từ chối, số đơn và tồn kho thay đổi 0"; còn ở bước chọn trạm (tạo nháp) thì trả đúng `CHARGING_ONLY`/`UNSUPPORTED_FAMILY`. Như vậy hai dòng này **chưa đáp ứng** AE-10a ở bước xác nhận. Hai phương án xử lý và đề xuất nằm ở §8.4, chờ M1/M7 chốt.
+**AE-10a ở bước xác nhận.** Đánh giá lại dịch vụ, nhóm pin, trạng thái mở cửa và tồn kho theo thứ tự ở §4.2 của hợp đồng API. Trả `409 STATION_NOT_ELIGIBLE` với lý do đầu tiên khớp. Ví dụ, nếu trạm ngừng đổi mọi nhóm pin, trả `CHARGING_ONLY`; nếu trạm vẫn đổi nhóm B nhưng đã ngừng cả sạc và đổi nhóm A của bản nháp, trả `UNSUPPORTED_FAMILY`.
 
 `request_hash` = SHA-256 hex của JSON chuẩn hóa (khóa sắp xếp, không khoảng trắng) gồm `draft_id`, `station_id`, `family_code`, `quantity`.
 
@@ -435,7 +437,7 @@ sequenceDiagram
     FE->>RS: POST /reservations, Idempotency-Key K1, {draft, ST-01, FAM_A, 1}
     RS->>DB: BEGIN, advisory lock(USER-A, K1)
     RS->>DB: idempotency_record(K1)? → chưa có
-    RS->>DB: draft FOR UPDATE, station FOR SHARE
+    RS->>DB: draft FOR UPDATE, station FOR SHARE, stock FOR UPDATE theo family_code
     RS->>DB: UPDATE stock -1 WHERE available >= 1 → 1 dòng (6 → 5)
     RS->>DB: INSERT reservation, INSERT idempotency_record(K1, hash)
     RS->>DB: COMMIT
@@ -507,7 +509,7 @@ sequenceDiagram
 | Cho phép nhiều đơn `ACTIVE` mỗi người (SRS §8, AE-11a) | D-08, `MAX_ACTIVE_RESERVATIONS_PER_USER = 0` | Khớp; chờ M1/M2 xác nhận |
 | FR-06: trước khi xác nhận hiển thị mã/tên trạm, nhóm pin, số lượng 1, hạn nháp, thời lượng giữ | `draft.station.station_id`/`name`, `family_code`, `quantity`, `expires_at`, `hold_minutes` (api_contracts §6.3) | Khớp |
 | FR-06: sau khi thành công hiển thị mã đơn, trạng thái, hạn giữ thực tế | `reservation.reservation_id`, `status`, `expires_at` (api_contracts §6.6) | Khớp |
-| AE-10a: năm lý do từ chối | `STATION_NOT_ELIGIBLE` + `ineligibility_reason` lúc tạo nháp và lúc xác nhận | Lúc tạo nháp: khớp cả năm dòng. Lúc xác nhận: khớp ba dòng, **chưa đáp ứng** hai dòng `CHARGING_ONLY` và `UNSUPPORTED_FAMILY`. Chờ M1/M7 chốt (§8.4) |
+| AE-10a: năm lý do từ chối | `STATION_NOT_ELIGIBLE` + `ineligibility_reason` lúc tạo nháp và lúc xác nhận | Đánh giá cả năm lý do tại hai thời điểm theo thứ tự ưu tiên của Station Service (§8.4) |
 | Hạn có hiệu lực đến ngay trước mốc hết hạn (SRS §3) | `now >= expires_at` là hết hạn, cho cả nháp và đơn | Khớp |
 
 ### 8.2 Chờ M2/M6/M7
@@ -521,20 +523,13 @@ sequenceDiagram
 
 Thêm vào xác nhận, ngay sau bước (2): `SELECT pg_advisory_xact_lock(hashtextextended(:user || '|ACTIVE_LIMIT', 0))`, đối soát hết hạn các đơn của người dùng, đếm đơn `ACTIVE`; vượt `MAX_ACTIVE_RESERVATIONS_PER_USER` thì `409 ACTIVE_RESERVATION_LIMIT`. Không cần đổi lược đồ.
 
-### 8.4 AE-10a ở bước xác nhận (chờ M1/M7 chốt)
+### 8.4 Thay đổi dịch vụ hoặc nhóm pin sau khi tạo nháp (AE-10a)
 
-AE-10a yêu cầu tạo nháp ở trạm đủ điều kiện, rồi chuyển trạm sang "chỉ sạc" hoặc "không hỗ trợ FAM_A" trước khi xác nhận. Lược đồ hiện tại không cho làm việc này. `fk_draft_battery_stock` trỏ từ bản nháp tới đúng dòng `station_battery_stock`, nên mọi lệnh xóa dòng đó đều bị từ chối. Bản nháp không bao giờ bị xóa, kể cả khi đã hết hạn. Vì vậy, chỉ cần từng có một bản nháp cho (trạm, nhóm) là trạm đó **không bao giờ** bỏ được dịch vụ đổi pin hay nhóm pin đó nữa, trừ khi đặt lại toàn bộ dữ liệu.
-
-| Phương án | Nội dung | Ảnh hưởng |
-| --- | --- | --- |
-| A. Giữ lược đồ | Hai dòng này chỉ kiểm tra ở bước tạo nháp. Ở bước xác nhận, kết quả nghiệm thu là "DB từ chối thay đổi, số đơn và tồn kho thay đổi 0" (đã kiểm chứng). | M1 sửa câu chữ AE-10a, M7 dùng cách hiểu này cho 2.3.1. Không đổi mã. |
-| B. Sửa thiết kế (đề xuất) | Thay `fk_draft_battery_stock` bằng hai khóa ngoại `station_id → station` và `family_code → battery_family`. Bước xác nhận đánh giá lại đủ thang `booking_eligibility` trên dữ liệu đã khóa, nên trả đúng `CHARGING_ONLY`/`UNSUPPORTED_FAMILY`. Thêm ràng buộc chặn xóa dòng tồn kho khi còn đơn `ACTIVE` dùng nó, để hủy/hết hạn luôn hoàn được pin. | Đáp ứng nguyên văn AE-10a và câu "dịch vụ/nhóm pin thay đổi trước xác nhận" của AE-10. Phải sửa `001_initial_schema.sql`. File này đang được bản SQLite dự phòng của backend và `check_seed.py` dùng chung, nên phải chạy lại 258 test backend, `check_seed.py` và script kiểm chứng. |
-
-Đề xuất chọn B, vì yêu cầu ghi rõ tình huống này và lỗi "không bao giờ bỏ được dịch vụ" là lỗi thật của lược đồ. M4 sẽ sửa sau khi M1/M7 đồng ý.
+Migration [002_reservation_stock.sql](../../db/migrations/002_reservation_stock.sql) thay khóa ngoại kép bằng `fk_draft_station` và `fk_draft_family`. Trạm có thể ngừng hỗ trợ một nhóm sau khi tạo nháp. Giao dịch xác nhận đọc lại cấu hình hiện tại trước khi giữ pin. Trigger bảo vệ dòng tồn kho trước thao tác xóa hoặc đổi khóa khi cặp trạm/nhóm còn đơn `ACTIVE`, để thao tác hủy hoặc hết hạn có thể hoàn pin. Đơn đã kết thúc và bản nháp chưa dùng vẫn tra cứu được khi trạm ngừng hỗ trợ nhóm đó.
 
 ### 8.5 Đồng bộ với prototype 2.1.2 (M3)
 
-Prototype 2.1.2 được dựng theo bản tạm rev 2 của §6 hợp đồng, nên gửi `draft_revision` và đọc các trường phản hồi mà hợp đồng v2.1 không có. Danh sách thay đổi phía client nằm ở [api_contracts.md §6.12](../architecture/api_contracts.md#612-thay-đổi-phía-client-so-với-bản-tạm-rev-2). M3 và M4 rà cùng nhau trước khi 2.2 bắt đầu nối API thật.
+Prototype gửi bốn trường `draft_id`, `station_id`, `family_code`, `quantity` và đọc thời lượng giữ từ `draft.hold_minutes`. Khi chọn trạm gần nhất, phản hồi tạo nháp hiển thị khoảng cách. Khi tải lại nháp theo mã, hai trường khoảng cách trả `null` vì tọa độ tìm kiếm chỉ dùng lúc chọn trạm. Chi tiết ở [hợp đồng API §6.3–6.5](../architecture/api_contracts.md#63-đối-tượng-draft).
 
 ---
 

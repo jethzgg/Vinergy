@@ -119,7 +119,8 @@ def main():
     print("1-3. Lược đồ, dữ liệu mẫu và kiểm tra")
     migrations = sorted(p.name for p in (DB_DIR / "migrations").glob("*.sql"))
     for name in migrations:
-        run_file(db, f"migrations/{name}")
+        variant = DB_DIR / "migrations" / "sqlite" / name
+        run_file(db, variant if variant.exists() else f"migrations/{name}")
     report(f"Áp dụng {len(migrations)} migration: {', '.join(migrations)}", bool(migrations))
     run_file(db, "seed.sql")
     run_validation(db, "Sau lần nạp đầu")

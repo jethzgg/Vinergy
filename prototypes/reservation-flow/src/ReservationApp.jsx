@@ -134,7 +134,7 @@ export default function ReservationApp() {
   )
 
   const handleConfirm = useCallback(
-    async ({ overrideFault = null, isRetry = false } = {}) => {
+    async ({ isRetry = false } = {}) => {
       if (!draft) return
       setSubmitting(true)
       setConfirmError(null)
@@ -151,13 +151,14 @@ export default function ReservationApp() {
         setPendingConfirm(submission)
       }
 
-      const effectiveFault = overrideFault ?? (faultMode === 'none' ? null : faultMode)
+      // A lost response affects this attempt only. A replay must be able to return its result.
+      if (faultMode === 'lost_response_after_commit') setFaultMode('none')
       try {
         const res = await apiConfirmReservation(
           session,
           submission.payload,
           submission.idempotencyKey,
-          { delayMs: 180, fault: effectiveFault },
+          { delayMs: 180, fault: faultMode },
         )
         syncSnapshot()
         if (!res.ok) {
@@ -541,7 +542,7 @@ export default function ReservationApp() {
           setConfirmError(null)
         }}
         onConfirm={() => handleConfirm({ isRetry: false })}
-        onRetrySameKey={() => handleConfirm({ overrideFault: null, isRetry: true })}
+        onRetrySameKey={() => handleConfirm({ isRetry: true })}
         onCreateFreshDraft={() =>
           openDraft({
             station_id: draft?.station?.station_id ?? selectedStationId,

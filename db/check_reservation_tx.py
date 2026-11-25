@@ -134,11 +134,13 @@ def confirm(conn, user: str, key: str, body: dict, now: datetime, pause_after_st
         if now >= draft_expires:
             raise Reject(409, "DRAFT_STALE", "DRAFT_EXPIRED")
 
-        status = conn.execute(
-            "SELECT opening_status FROM station WHERE station_id = %s FOR SHARE", (station,)
-        ).fetchone()[0]
-        if status != "OPEN":
-            reason = "STATION_CLOSED" if status == "CLOSED" else "STATION_MAINTENANCE"
+        conn.execute("SELECT station_id FROM station WHERE station_id = %s FOR SHARE", (station,))
+        conn.execute(
+            "SELECT family_code FROM station_battery_stock WHERE station_id = %s ORDER BY family_code FOR UPDATE",
+            (station,),
+        ).fetchall()
+        eligible, reason = booking_eligibility(station_repo(conn).get(station), family)
+        if not eligible:
             raise Reject(409, "STATION_NOT_ELIGIBLE", reason)
 
         cur = conn.execute(
@@ -247,6 +249,9 @@ def reset(url: str) -> None:
             for m in sorted((DB_DIR / "migrations").glob("*.sql")):
                 c.execute(m.read_text(encoding="utf-8"))
         else:
+            if c.execute("SELECT 1 FROM pg_constraint WHERE conrelid = 'reservation_draft'::regclass"
+                         " AND conname = 'fk_draft_battery_stock'").fetchone():
+                c.execute((DB_DIR / "migrations" / "002_reservation_stock.sql").read_text(encoding="utf-8"))
             c.execute((DB_DIR / "reset.sql").read_text(encoding="utf-8"))
         c.execute((DB_DIR / "seed.sql").read_text(encoding="utf-8"))
 
@@ -509,18 +514,31 @@ def scenarios(url: str) -> None:
             report(f"AE-10a ST-01 {label} -> {reason}, đơn/kho thay đổi 0",
                    isinstance(r, Reject) and r.reason == reason
                    and (stock(c), count(c, "SELECT count(*) FROM reservation")) == before)
+    for station, reason in [("ST-02", "CHARGING_ONLY"), ("ST-04", "UNSUPPORTED_FAMILY")]:
+        with fresh() as c:
+            c.execute("INSERT INTO station_battery_stock (station_id, family_code, available_batteries)"
+                      " VALUES (%s, 'FAM_A', 1)", (station,))
+            d = create_draft(c, "USER-A", station, "FAM_A", T0)
+            c.execute("DELETE FROM station_battery_stock WHERE station_id = %s AND family_code = 'FAM_A'", (station,))
+            remaining = count(c, "SELECT sum(available_batteries) FROM station_battery_stock")
+            result = attempt(confirm, c, "USER-A", "key-ae10a-change-01", body_for(d, station), T0)
+            report(f"AE-10a {station} cấu hình trạm thay đổi -> 409 {reason}, đơn/kho không đổi",
+                   isinstance(result, Reject) and (result.status, result.code, result.reason) ==
+                   (409, "STATION_NOT_ELIGIBLE", reason) and count(c, "SELECT count(*) FROM reservation") == 0
+                   and count(c, "SELECT sum(available_batteries) FROM station_battery_stock") == remaining)
+
     with fresh() as c:
-        create_draft(c, "USER-A", "ST-01", "FAM_A", T0)
-        for label, sql in [("chỉ sạc (bỏ đổi pin)", "DELETE FROM station_battery_stock WHERE station_id = 'ST-01'"),
-                           ("bỏ hỗ trợ FAM_A",
-                            "DELETE FROM station_battery_stock WHERE station_id = 'ST-01' AND family_code = 'FAM_A'")]:
-            try:
-                c.execute(sql)
-                refused = False
-            except psycopg.errors.ForeignKeyViolation:
-                refused = True
-            report(f"AE-10a ST-01 {label} khi còn nháp: DB từ chối (fk_draft_battery_stock), kho 6",
-                   refused and stock(c) == 6)
+        d = create_draft(c, "USER-A", "ST-01", "FAM_A", T0)
+        rid = confirm(c, "USER-A", "key-ae10a-active-01", body_for(d), T0)["reservation_id"]
+        remove_stock = "DELETE FROM station_battery_stock WHERE station_id = 'ST-01' AND family_code = 'FAM_A'"
+        try:
+            c.execute(remove_stock)
+        except psycopg.errors.ForeignKeyViolation:
+            report("Đơn ACTIVE bảo vệ dòng kho cho đến khi hoàn pin", stock(c) == 5)
+        else:
+            report("Đơn ACTIVE bảo vệ dòng kho cho đến khi hoàn pin", False)
+        cancel(c, "USER-A", rid, T0 + timedelta(minutes=1))
+        report("Sau khi hủy và hoàn pin, có thể bỏ hỗ trợ nhóm", stock(c) == 6 and c.execute(remove_stock).rowcount == 1)
 
     print("AE-11a: hai lần đặt độc lập của cùng người (không giới hạn đơn ACTIVE)")
     with fresh() as c:

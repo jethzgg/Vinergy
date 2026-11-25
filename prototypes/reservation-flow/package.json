@@ -8,7 +8,8 @@
     "dev": "vite --port 5174",
     "build": "vite build",
     "preview": "vite preview --port 4174",
-    "check:oracle": "node scripts/check-oracle.mjs"
+    "check:oracle": "node scripts/check-oracle.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "lucide-react": "^1.74.0",
@@ -16,6 +17,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/vite": "^4.3.5",
     "@vitejs/plugin-react": "^6.3.0",
     "tailwindcss": "^4.3.5",

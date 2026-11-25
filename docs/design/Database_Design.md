@@ -63,14 +63,14 @@ Khóa chính được **in đậm**. Thuộc tính suy diễn không lưu trữ 
 | R2 | **OFFERS_CHARGING** (hỗ trợ sạc) | STATION — BATTERY_FAMILY | M : N | Cả hai phía tùy chọn | available_ports ≥ 0 |
 | R3 | **HAS_SESSION** | APP_USER — USER_SESSION | 1 : N | Phiên bắt buộc có người dùng; người dùng có 0..N phiên | — |
 | R4 | **PREPARES** (chuẩn bị) | APP_USER — RESERVATION_DRAFT | 1 : N | Bản nháp bắt buộc có đúng một người dùng; người dùng có 0..N bản nháp | — |
-| R5 | **TARGETS** (nhắm tới) | RESERVATION_DRAFT — STOCKS_BATTERY | N : 1 | Bản nháp bắt buộc trỏ tới đúng một cặp (trạm, nhóm) **có hỗ trợ đổi pin**; một cặp có 0..N bản nháp | — |
+| R5 | **TARGETS** (nhắm tới) | RESERVATION_DRAFT — STATION và RESERVATION_DRAFT — BATTERY_FAMILY | N : 1 cho từng quan hệ | Bản nháp tham chiếu trạm và nhóm đã chọn; máy chủ kiểm tra hỗ trợ đổi pin ở lúc tạo và lúc xác nhận | AE-10a |
 | R6 | **CONFIRMED_AS** (được xác nhận thành) | RESERVATION_DRAFT — RESERVATION | 1 : 1 | Đơn bắt buộc có đúng một bản nháp; bản nháp có 0..1 đơn | — |
 | R7 | **OWNS_KEY** (quan hệ định danh) | APP_USER — IDEMPOTENCY_RECORD | 1 : N | Bản ghi bắt buộc có người dùng | — |
 | R8 | **RESULTED_IN** (cho kết quả) | IDEMPOTENCY_RECORD — RESERVATION | 1 : 1 | Bản ghi bắt buộc trỏ tới đúng một đơn; mỗi đơn có đúng một bản ghi thao tác xác nhận | — |
 
 Ghi chú khi vẽ:
 
-- R5 nối bản nháp với **mối quan hệ R1** (thực thể kết hợp / aggregation), không nối trực tiếp với STATION và BATTERY_FAMILY. Nhờ đó mô hình tự loại trường hợp nháp ở trạm chỉ sạc hoặc nhóm không tương thích (AE-02, AE-03). Nếu ký pháp của bạn không có aggregation, hãy vẽ R1 thành thực thể kết hợp STATION_BATTERY_STOCK.
+- R5 gồm hai liên kết riêng để bản nháp còn truy xuất được sau khi trạm thay đổi nhóm hỗ trợ. ERD Sprint 2 phản ánh quan hệ này trong [thiết kế đặt pin §5.2](./Reservation_Design.md#52-sơ-đồ-er-v2-phần-đặt-pin).
 - RESERVATION **không** có quan hệ trực tiếp với APP_USER, STATION hay BATTERY_FAMILY: chủ sở hữu, trạm và nhóm của đơn được xác định qua bản nháp (R6 → R4, R5).
 - Vòng đời `ACTIVE → CANCELLED | EXPIRED` là thuộc tính `status` của RESERVATION, không phải thực thể riêng.
 - DEMO_ORIGIN không có mối quan hệ nào.
@@ -84,7 +84,7 @@ ER diagram: https://app.diagrams.net/#G147Q8nPlmETRmFq8c0bAgnnfp3QQhCmQd#%7B%22p
 | --- | --- |
 | Thực thể mạnh | Một quan hệ; thuộc tính phức hợp tọa độ tách thành `lat`, `lng` |
 | R1, R2 (M:N có thuộc tính) | Quan hệ riêng, khóa chính là cặp khóa ngoại (station_id, family_code) |
-| R3, R4, R5 (1:N) | Khóa ngoại đặt ở phía N; R5 dùng khóa ngoại kép tới quan hệ của R1 |
+| R3, R4, R5 (1:N) | Khóa ngoại đặt ở phía N; R5 dùng khóa ngoại riêng tới trạm và nhóm |
 | R6 (1:1, một phía bắt buộc) | Khóa ngoại `draft_id` + `UNIQUE` đặt ở RESERVATION (phía tham gia bắt buộc) để không có giá trị NULL |
 | Thực thể yếu IDEMPOTENCY_RECORD | Khóa chính = khóa của chủ (`user_id`) + khóa bộ phận |
 | R8 (1:1) | Khóa ngoại `reservation_id` ở IDEMPOTENCY_RECORD + `UNIQUE (operation, reservation_id)` |
@@ -117,7 +117,7 @@ user_session          (session_token_hash, user_id, created_at, expires_at, revo
 
 reservation_draft     (draft_id, user_id, station_id, family_code, quantity, created_at, expires_at)
                       PK draft_id · FK user_id → app_user
-                      FK (station_id, family_code) → station_battery_stock
+                      FK station_id → station · FK family_code → battery_family
 
 reservation           (reservation_id, draft_id, status, created_at, expires_at, cancelled_at, expired_at)
                       PK reservation_id · UNIQUE draft_id · FK draft_id → reservation_draft
@@ -139,7 +139,7 @@ demo_origin           (origin_id, lat, lng)
 | station | `opening_status IN ('OPEN','CLOSED','MAINTENANCE')`; lat ∈ [−90, 90]; lng ∈ [−180, 180]; `station_id` dạng `ST-nn` | BR-04, mục 3 SRS |
 | station_battery_stock | `available_batteries >= 0` | NFR-01, AE-13 |
 | station_charging_port | `available_ports >= 0` | mục 6 SRS |
-| reservation_draft | `quantity = 1`; `expires_at > created_at`; khóa ngoại kép tới tồn kho pin | BR-05, BR-02 |
+| reservation_draft | `quantity = 1`; `expires_at > created_at`; khóa ngoại tới trạm và nhóm pin | BR-05, BR-02 |
 | reservation | `UNIQUE (draft_id)`; ràng buộc trạng thái: ACTIVE ⇒ không có mốc kết thúc; CANCELLED ⇒ `cancelled_at < expires_at`; EXPIRED ⇒ `expired_at >= expires_at` | BR-06, BR-09 |
 | idempotency_record | Khóa chính theo phạm vi (người dùng, thao tác, khóa); `operation IN ('CONFIRM_RESERVATION')` | BR-08 |
 
@@ -158,7 +158,7 @@ Kiểu dữ liệu: tọa độ `NUMERIC(8,6)`/`NUMERIC(9,6)` để giữ đúng
 **Xác nhận (BR-07, BR-08)** — một giao dịch:
 
 1. Tra `idempotency_record` theo (người dùng từ phiên, `CONFIRM_RESERVATION`, khóa). Có và `request_hash` khớp → trả đơn gốc (sau khi đối soát hết hạn). Có nhưng khác hash → xung đột khóa.
-2. Kiểm tra bản nháp thuộc người dùng, chưa hết hạn, nội dung yêu cầu khớp bản nháp, trạm `OPEN`.
+2. Kiểm tra bản nháp thuộc người dùng, chưa hết hạn, nội dung yêu cầu khớp bản nháp. Kiểm tra điều kiện đổi pin hiện tại của trạm theo thứ tự dịch vụ, nhóm, trạng thái trạm và tồn kho.
 3. `UPDATE station_battery_stock SET available_batteries = available_batteries - 1 WHERE station_id = … AND family_code = … AND available_batteries >= 1`. Không có dòng nào được cập nhật → không khả dụng, hủy giao dịch.
 4. `INSERT` vào `reservation` rồi `idempotency_record`. Vi phạm `UNIQUE (draft_id)` → bản nháp đã dùng; vi phạm khóa chính của `idempotency_record` → yêu cầu trùng khóa chạy đồng thời, đọc lại theo bước 1.
 
@@ -181,6 +181,7 @@ Lược đồ được quản lý bằng các tệp SQL đánh số trong [db/mi
 | Tệp | Nội dung |
 | --- | --- |
 | [001_initial_schema.sql](../../db/migrations/001_initial_schema.sql) | 10 bảng, 4 chỉ mục, 2 khung nhìn của thiết kế v0 |
+| [002_reservation_stock.sql](../../db/migrations/002_reservation_stock.sql) | Tách liên kết trạm và nhóm pin của bản nháp, bảo vệ dòng tồn kho khi còn đơn ACTIVE. [Bản SQLite](../../db/migrations/sqlite/002_reservation_stock.sql) áp dụng quy tắc tương ứng. |
 
 Quy ước:
 
@@ -231,7 +232,7 @@ station          (station_id, name, area_label, lat, lng, opening_status)
 station_resource (station_id, service_type, family_code, available_count)
 ```
 
-Sau đó `station_resource` được tách ngang theo `service_type` thành `station_battery_stock` và `station_charging_port`. Đây là quyết định thiết kế chứ không phải yêu cầu của chuẩn hóa: hai bảng con đều giữ nguyên dạng chuẩn, đổi lại khóa ngoại của bản nháp bảo đảm được BR-02 mà không cần cột hằng `service_type = 'SWAPPING'`.
+Sau đó `station_resource` được tách ngang theo `service_type` thành `station_battery_stock` và `station_charging_port`. Đây là quyết định thiết kế chứ không phải yêu cầu của chuẩn hóa: hai bảng con đều giữ nguyên dạng chuẩn, quy tắc BR-02 được kiểm tra khi tạo và xác nhận bản nháp theo các dòng tồn kho hiện tại.
 
 ### 4.4 Dạng chuẩn 3 (3NF) và BCNF
 
@@ -296,7 +297,7 @@ Khung tọa độ ở C3 chỉ là phép kiểm tra hợp lý cho dữ liệu m�
 [db/reset.sql](../../db/reset.sql) xóa mọi dòng của cả 10 bảng theo thứ tự khóa ngoại trong một giao dịch. Đặt lại = chạy `reset.sql` rồi `seed.sql`;
 
 ```
-psql -d <db_thử_nghiệm> -f db/migrations/001_initial_schema.sql -f db/seed.sql   # lần đầu, trên CSDL trống
+psql -d <db_thử_nghiệm> -v ON_ERROR_STOP=1 -f db/migrations/001_initial_schema.sql -f db/migrations/002_reservation_stock.sql -f db/seed.sql   # lần đầu, trên CSDL trống
 psql -d <db_thử_nghiệm> -f db/reset.sql  -f db/seed.sql        # đặt lại sau mỗi ca kiểm thử
 psql -d <db_thử_nghiệm> -f db/validate_seed.sql                # kiểm tra
 ```
