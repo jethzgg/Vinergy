@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Vinergy EV design tokens (shared with WBS 1.2.1 station-search prototype)
+   Swapping = emerald, Charging = cyan, surfaces = slate, alerts = amber/crimson.
+   Elevation comes from borders first, one soft shadow only for overlays.
+--------------------------------------------------------------------------- */
+@theme {
+  --font-sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+
+  --color-swap-700: #047857;
+  --color-swap-600: #059669;
+  --color-swap-500: #10b981;
+  --color-swap-200: #a7f3d0;
+  --color-swap-50: #ecfdf5;
+
+  --color-charge-700: #0369a1;
+  --color-charge-600: #0284c7;
+  --color-charge-500: #0ea5e9;
+  --color-charge-200: #bae6fd;
+  --color-charge-50: #f0f9ff;
+
+  --color-warn-700: #b45309;
+  --color-warn-600: #d97706;
+  --color-warn-200: #fde68a;
+  --color-warn-50: #fffbeb;
+
+  --color-stop-700: #b91c1c;
+  --color-stop-600: #dc2626;
+  --color-stop-200: #fecaca;
+  --color-stop-50: #fef2f2;
+
+  --vg-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --vg-fast: 140ms;
+  --vg-base: 220ms;
+  --vg-slow: 320ms;
+}
+
+html,
+body {
+  background-color: var(--color-slate-100);
+  color: var(--color-slate-900);
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-slate-900);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes vg-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vg-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.vg-rise {
+  animation: vg-rise var(--vg-base) var(--vg-ease) both;
+}
+
+.vg-fade {
+  animation: vg-fade var(--vg-fast) var(--vg-ease) both;
+}
+
+p {
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vg-rise,
+  .vg-fade {
+    animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+  }
+}
