@@ -175,12 +175,12 @@ Provider lỗi hoặc quá thời gian trả `503`/`504` kèm `fallback: "MANUAL
 | AD-01 | **Modular monolith:** một backend deploy được, chia module `station`, `session`, `chat`, `reservation`. Module chỉ gọi nhau qua service interface, không đọc bảng của module khác. | Nhóm 7 người, 6 tuần, 18 bản ghi. Microservice chỉ thêm chi phí vận hành. | Một tiến trình, một DB. Ranh giới module giữ cho code dễ tách khi cần. | Đề xuất |
 | AD-02 | **PostgreSQL** cho mọi môi trường (development/test chạy bằng container). | BR-07/BR-08 cần transaction, khóa dòng và unique constraint. Test race AE-13 phải chạy trên cùng engine với bản demo. SQLite không đại diện được cho truy cập đồng thời. | Integration test cần DB thật, không dùng mock. | Đề xuất, M4 xác nhận ở 1.1.3 |
 | AD-03 | **Tính Haversine trong Station Service** trên toàn bộ trạm, không dùng PostGIS hay truy vấn không gian. | 18 bản ghi. Dễ kiểm thử trực tiếp với giá trị đối chiếu của AE. | Cần xem lại nếu dữ liệu tăng lên hàng nghìn bản ghi. | Chốt |
-| AD-04 | **Phiên demo bằng cookie phía server và CSRF token** (chi tiết §6). | BR-10, AE-14: danh tính không được do client hoặc LLM tự khai trong từng request. | Không có header danh tính do client đặt. Mọi `user_id` trong body, query hoặc tham số tool đều bị bỏ qua. | Chốt |
+| AD-04 | **Phiên demo bằng cookie phía server và CSRF token** (chi tiết §6). | BR-10, AE-14: danh tính không được do client hoặc LLM tự khai trong từng request. | Không có header danh tính do client đặt. Mọi `user_id` trong body, query hoặc tham số tool không bao giờ được dùng để phân quyền; ở endpoint HTTP chúng bị từ chối là trường lạ (api_contracts §3.4). | Chốt |
 | AD-05 | **Ngữ cảnh do orchestrator chèn:** `user`, `location` và `family_code` mặc định đến từ phiên và UI. Tool schema không có `user_id`, `lat`, `lng`. | Ngăn LLM bịa tọa độ hoặc danh tính (AE-19, AE-20) và không gửi vị trí cho bên thứ ba (NFR-04). | Chat UI phải gửi `context.location` khi người dùng đã chọn vị trí. | Chốt |
 | AD-06 | **Một nguồn chuẩn cho ràng buộc đầu vào:** một module validator dùng chung cho HTTP và tool adapter. CI có contract test đối chiếu enum và giới hạn của validator với [tool_schemas.json](./tool_schemas.json), và kiểm tra response mẫu của [api_contracts.md](./api_contracts.md) theo `result_schemas`. | Tránh lệch giữa bảng tham số, JSON schema và code. | Đổi ràng buộc phải sửa validator, schema và tài liệu trong cùng một PR. | Chốt |
 | AD-07 | **Clock abstraction:** mọi logic thời gian (`expires_at`, TTL phiên, hết hạn bản nháp) gọi `Clock.now()`. Lưu thời gian dạng UTC. | AE-16 yêu cầu đồng hồ server điều khiển được. | Cấm gọi trực tiếp giờ hệ thống trong domain code. | Chốt |
 | AD-08 | **Chỉ đường bằng Google Maps URL** `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lng>`, không dùng Directions API. | SRS chỉ yêu cầu mở chỉ đường bên ngoài. Không tốn khóa hay quota, và vẫn dùng được khi Maps JS lỗi (AE-06). | Chỉ bật Maps JavaScript API cho browser key. | Chốt |
-| AD-09 | **Hướng giữ pin nguyên tử** (ràng buộc cho 2.1.3). Trong một transaction: (1) tra hoặc tạo bản ghi idempotency unique `(user_id, operation, idempotency_key)` kèm hash nội dung request; (2) cập nhật có điều kiện bản nháp `used_at IS NULL`; (3) `UPDATE battery_stock SET available = available - 1 WHERE station_id = ? AND family_code = ? AND available >= 1` và yêu cầu đúng 1 dòng bị ảnh hưởng; (4) tạo đơn với unique `draft_id`. Hoàn pin chỉ khi `UPDATE reservations SET status = ? WHERE id = ? AND status = 'ACTIVE'` ảnh hưởng đúng 1 dòng. | Đáp ứng BR-06…BR-09, AE-11, AE-13, AE-15, AE-16d mà không cần khóa phân tán. | Bước (1) chạy trước kiểm tra hạn bản nháp, đúng thứ tự của BR-08. | Đề xuất, chốt ở 2.1.3 |
+| AD-09 | **Hướng giữ pin nguyên tử** (chi tiết hóa ở [Reservation_Design.md §6](../design/Reservation_Design.md#6-giao-dịch-nguyên-tử), 2.1.3). Trong một transaction: (1) tra hoặc tạo bản ghi idempotency unique `(user_id, operation, idempotency_key)` kèm hash nội dung request; (2) cập nhật có điều kiện bản nháp `used_at IS NULL`; (3) `UPDATE battery_stock SET available = available - 1 WHERE station_id = ? AND family_code = ? AND available >= 1` và yêu cầu đúng 1 dòng bị ảnh hưởng; (4) tạo đơn với unique `draft_id`. Hoàn pin chỉ khi `UPDATE reservations SET status = ? WHERE id = ? AND status = 'ACTIVE'` ảnh hưởng đúng 1 dòng. | Đáp ứng BR-06…BR-09, AE-11, AE-13, AE-15, AE-16d mà không cần khóa phân tán. | Bước (1) chạy trước kiểm tra hạn bản nháp, đúng thứ tự của BR-08. | Đề xuất, chốt ở 2.1.3 |
 | AD-10 | **Ngôn ngữ và framework:** chưa chốt (§10). Ràng buộc bắt buộc: hỗ trợ transaction PostgreSQL, có thư viện schema validation dùng được cho cả HTTP và tool, có công cụ đo coverage line và branch. | Cần thống nhất với năng lực của nhóm. | Chặn 1.3.1 nếu chưa chốt. | Mở |
 
 ---
@@ -234,6 +234,12 @@ Provider lỗi hoặc quá thời gian trả `503`/`504` kèm `fallback: "MANUAL
 | `SESSION_SECRET` | Server | **Có** | Dùng ký và bảo vệ phiên |
 | `SESSION_TTL_MINUTES` | Server | Không | `480` (đề xuất) |
 | `DEMO_LOGIN_ENABLED` | Server | Không | `true` ở môi trường demo/dev/test |
+| `DRAFT_TTL_MINUTES` | Server | Không | `5`, tính từ lúc tạo nháp (đề xuất M1 ở 2.1.1, SRS §8; chờ M1/M2/M4 xác nhận) |
+| `RESERVATION_HOLD_MINUTES` | Server | Không | `15`, tính từ lúc xác nhận thành công (đề xuất M1 ở 2.1.1, SRS §8; chờ M1/M2/M4 xác nhận) |
+| `EXPIRY_SWEEP_INTERVAL_SECONDS` | Server | Không | `30` (đề xuất 2.1.3, chờ M2/M6/M7) |
+| `EXPIRY_MAX_RELEASE_DELAY_SECONDS` | Server | Không | `60` (đề xuất 2.1.3, chờ M2/M6/M7) |
+| `IDEMPOTENCY_LOCK_TIMEOUT_MS` | Server | Không | `5000` |
+| `MAX_ACTIVE_RESERVATIONS_PER_USER` | Server | Không | `0` = không giới hạn (đề xuất M1 ở 2.1.1) |
 | `LLM_PROVIDER`, `LLM_MODEL` | Server | Không | Chưa chốt (§10) |
 | `LLM_API_KEY` | Server | **Có** | Áp dụng giới hạn ngân sách/quota ở phía provider |
 | `LLM_TIMEOUT_MS` | Server | Không | `15000` (đề xuất cho spike) |
@@ -279,9 +285,9 @@ So sánh `distance_km` với giá trị đối chiếu theo sai số tuyệt đ�
 | Xác nhận PostgreSQL (AD-02) | PostgreSQL | M4 | Trong 1.1.3 |
 | LLM provider và model | Bắt buộc hỗ trợ function calling | M2/M6 | Trước 1.3.2 |
 | Giới hạn LLM (timeout, số lượt tool, rate limit) | 15 s / 3 lượt / 10 lần mỗi phút | M2/M6 | Giá trị spike trước 1.3.2; giá trị cuối trước 3.1.3 |
-| Thời gian giữ pin, hạn bản nháp | Cấu hình được, chưa đặt giá trị | M1/M2/M4 | 2.1.1/2.1.3 |
-| Chu kỳ Expiry Worker, độ trễ hoàn pin tối đa, phục hồi khi lỗi | Theo AD-09 và BR-09 | M2/M6/M7 | 2.1.3 |
-| Giới hạn một đơn `ACTIVE` mỗi người | Không giới hạn (đúng baseline SRS) | M1/M2 | 2.1.1 |
+| Thời gian giữ pin, hạn bản nháp | Cấu hình được. M1 đề xuất ở 2.1.1 (SRS §8): giữ 15 phút từ lúc xác nhận, nháp 5 phút từ lúc tạo. 2.1.3 dùng đúng hai giá trị này ([Reservation_Design.md §2](../design/Reservation_Design.md#2-cấu-hình)) | M1/M2/M4 | Xác nhận trước 2.2.1 |
+| Chu kỳ Expiry Worker, độ trễ hoàn pin tối đa, phục hồi khi lỗi | 2.1.3 đề xuất 30 s / 60 s, một worker nhờ advisory lock, chạy một lượt khi khởi động ([Reservation_Design.md §6.5](../design/Reservation_Design.md#65-tác-vụ-nền-hết-hạn-expiry-worker)) | M2/M6/M7 | Xác nhận trước 2.2.5 |
+| Giới hạn một đơn `ACTIVE` mỗi người | Không giới hạn; M1 đề xuất cho phép nhiều đơn ở 2.1.1 (AE-11a) | M1/M2 | Xác nhận trước 2.2.1 |
 | Lưu nội dung hội thoại ở Sprint 3 | Mặc định không lưu | M2/M7 | Trước 3.1.3 |
 | Ngưỡng độ trễ | Theo kết quả đo ở §9 | M2/M7 | Sau rà soát Sprint 1, trước 3.3.2 |
 | Xác nhận phạm vi và loại trừ coverage | Theo đề xuất ở §9 | M2/M7 | Trước 1.3.1 / 1.3.3 |
@@ -294,3 +300,5 @@ So sánh `distance_km` với giá trị đối chiếu theo sai số tuyệt đ�
 | --- | --- | --- |
 | rev 1 | — | Bản nháp đầu tiên |
 | rev 2 | 2026-11-13 | Thêm Session/CSRF, Clock, Expiry Worker, Seed/Reset CLI và spike harness vào sơ đồ. Sửa endpoint đặt pin cho khớp contract. Thêm luồng chính, quyết định kiến trúc AD-01…AD-10, chính sách quyền riêng tư/quyền truy cập/log, cơ chế hash session và phục hồi khi hết hạn, cấu hình môi trường, phạm vi coverage và quyết định còn mở. Chuyển chỉ đường sang Google Maps URL. |
+| rev 3 | 2026-11-23 | (2.1.3, M4) Thêm biến cấu hình đặt pin, cập nhật quyết định còn mở về thời gian giữ pin và Expiry Worker, liên kết AD-09 tới Reservation_Design.md. |
+| rev 3.1 | 2026-11-24 | (2.1.3, M4) Cập nhật cấu hình và quyết định còn mở theo đề xuất 2.1.1: nháp 5 phút, giữ 15 phút, cho phép nhiều đơn `ACTIVE`. |

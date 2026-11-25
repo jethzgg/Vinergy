@@ -153,7 +153,7 @@ Kiểu dữ liệu: tọa độ `NUMERIC(8,6)`/`NUMERIC(9,6)` để giữ đúng
 
 ### 3.5 Cách lược đồ hỗ trợ các giao dịch bắt buộc
 
-Đây là gợi ý cho M2/M6 khi triển khai, không phải mã đã có.
+Đây là gợi ý cho M2/M6 khi triển khai, không phải mã đã có. Bản chi tiết (thứ tự khóa, idempotency, worker) đã chốt ở [Reservation_Design.md §6](./Reservation_Design.md#6-giao-dịch-nguyên-tử) (2.1.3).
 
 **Xác nhận (BR-07, BR-08)** — một giao dịch:
 
