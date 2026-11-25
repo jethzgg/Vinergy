@@ -196,3 +196,37 @@ Mỗi lỗi từ `api_contracts.md §2.2 & §6.2` có thông điệp người d�
 
 ---
 
+## 5. Ma trận Responsive & Khả năng truy cập (SRS §8 / NFR-05 / AE-23d, AE-23e)
+
+Đóng phần mở rộng kích thước hiển thị và kiểm tra bàn phím cho luồng đặt pin (mốc WBS 2.1.2 trong SRS §8):
+
+### 5.1. Ma trận kích thước hiển thị
+
+| Breakpoint | Bố cục Màn hình Xác nhận | Bố cục Đơn của tôi & Chi tiết | Mục tiêu chạm & đọc |
+| --- | --- | --- | --- |
+| `320px` (Mobile nhỏ) | Dialog full-width (`mx-2`), lưới thông tin 1 cột, 2 nút xếp dọc (`flex-col-reverse`), nhãn mô phỏng không bị cắt | 1 cột: danh sách đơn phía trên hoặc chuyển sang khung chi tiết có nút `Quay lại danh sách` | Không tràn ngang (`overflow-x: hidden`), nút tối thiểu `44×44 px`, cỡ chữ tối thiểu `12px` |
+| `768px` (Tablet) | Dialog căn giữa `max-w-lg`, lưới nhóm pin & số lượng 2 cột | 2 cột gọn (`grid-cols-12`: 5/7) | Thanh trạng thái phiên và bộ lọc tab nằm gọn 1–2 dòng |
+| `1024px` (Laptop) | Dialog căn giữa `max-w-lg` | 2 cột (`380px` danh sách cuộn độc lập + chi tiết bên phải) | Toàn bộ thông tin chính của đơn thấy ngay không cần cuộn |
+| `1440px` (Desktop) | Dialog căn giữa `max-w-lg` trong vùng nội dung `max-w-6xl` | 2 cột rộng thoáng, hiển thị đủ lịch sử đơn và bảng đối chiếu tồn kho | Độ rộng dòng văn bản tối đa `65ch` |
+
+### 5.2. Checklist bàn phím & WCAG 2.2 AA
+
+- **Dialog (`ConfirmDraftModal`, `CancelOrderDialog`)**: dùng `role="dialog"`, `aria-modal="true"`, `aria-labelledby`, `aria-describedby`; tự động chuyển focus vào trong dialog khi mở, giữ vòng lặp `Tab`/`Shift+Tab` bên trong dialog, đóng bằng phím `Escape` (trừ khi đang gửi yêu cầu xác nhận nguyên tử để tránh đóng nhầm giữa chừng), và trả focus về nút kích hoạt khi đóng.
+- **Thông báo động**: Banner lỗi dùng `role="alert"` (`aria-live="assertive"`); cập nhật số lượng đơn, trạng thái đếm ngược ở mốc cảnh báo và kết quả làm mới dùng `role="status"` (`aria-live="polite"`).
+- **Điều khiển bàn phím**: Mọi thao tác chọn trạm, tạo bản nháp, xác nhận, đổi tab lọc đơn, chọn đơn, làm mới, hủy đơn và đổi phiên demo đều dùng thẻ `<button>` / `<select>` / `<input>` chuẩn, có vòng `:focus-visible` độ tương phản cao (`2px solid slate-900`).
+- **Tương phản & Chuyển động**: Tỷ lệ tương phản văn bản `>= 4.5:1` (`slate-900`/`slate-700` trên nền trắng/slate-50, `swap-700` trên `swap-50`, `stop-700` trên `stop-50`); toàn bộ animation tắt khi `prefers-reduced-motion: reduce`.
+
+---
+
+## 6. Truy vết yêu cầu & Nghiệm thu
+
+| Yêu cầu / AE | Thành phần / Hành vi đáp ứng trong 2.1.2 |
+| --- | --- |
+| FR-06, BR-05, BR-06, AE-08, AE-09 | `ConfirmDraftModal` khóa `quantity = 1`, hiển thị trạm/nhóm pin/hạn bản nháp và nhãn "Bản nháp chưa giữ tồn kho"; tồn kho chỉ giảm khi xác nhận. |
+| FR-06, BR-07, AE-10, AE-13 | `confirmReservation()` kiểm tra nguyên tử; khi hết pin lúc xác nhận trả `409 STATION_NOT_ELIGIBLE (OUT_OF_STOCK)` và gợi ý trạm gần nhất đủ điều kiện. |
+| FR-07, FR-12, BR-08, AE-11, AE-12, AE-21 | Trạng thái "Chưa rõ kết quả" giữ nguyên `Idempotency-Key` để đối soát (`200 Idempotent-Replayed`); đổi nội dung cùng khóa hiển thị `409 IDEMPOTENCY_KEY_REUSED`. |
+| FR-07, FR-08, BR-10, AE-14, AE-23f | Bộ chuyển phiên demo (`USER-A`/`USER-B`); đơn của người khác trả `404 RESERVATION_NOT_FOUND`; phiên hết hạn trả `401 SESSION_EXPIRED`. |
+| FR-08, FR-09, BR-09, AE-15, AE-16 | `CancelOrderDialog` + đồng hồ máy chủ mô phỏng; hủy trước hạn → `CANCELLED` (+1 tồn kho đúng 1 lần); hủy tại/sau hạn → đối soát `EXPIRED` (+1 tồn kho đúng 1 lần). |
+| BR-06, AE-17 | Xử lý riêng `DRAFT_STALE` (hết hạn/đổi revision) và `DRAFT_ALREADY_USED` (đã tạo đơn với khóa khác). |
+| FR-11, AE-18 | Nút "Đặt tại trạm gần nhất đủ điều kiện" bỏ qua ST-05 hết pin để chọn ST-03 (1.2 km), hoặc trả `NO_ELIGIBLE_STATION` khi bán kính `0.5 km`. |
+| BR-01, NFR-05, AE-23d, AE-23e | Nhãn dữ liệu mô phỏng cố định, điều hướng bàn phím đầy đủ, kiểm thử 4 breakpoint `320/768/1024/1440px`. |
