@@ -279,9 +279,136 @@ export default function ReservationApp() {
     await loadOrders(freshSession)
   }, [loadOrders, syncSnapshot])
 
-  const runScenario = useCallback((scenarioId) => {
-    setActiveScenario(scenarioId)
-  }, [])
+  const runScenario = useCallback(
+    async (scenarioId) => {
+      resetMockStore()
+      setDraft(null)
+      setPendingConfirm(null)
+      setDraftError(null)
+      setConfirmError(null)
+      setLookupError(null)
+      setStatusNotice(null)
+      setCancelTarget(null)
+      setFaultMode('none')
+      setActiveScenario(scenarioId)
+
+      const meta = REVIEW_SCENARIOS.find((s) => s.id === scenarioId)
+      setScenarioHint(meta?.hint ?? '')
+
+      const userA = makeSession('USER-A')
+      setSession(userA)
+      setFamilyCode('FAM_A')
+      syncSnapshot()
+
+      if (scenarioId === 'confirm-draft') {
+        setSelectedStationId('ST-01')
+        await openDraft({ station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }, userA)
+        return
+      }
+
+      if (scenarioId === 'orders-active') {
+        const d = await apiCreateDraft(
+          userA,
+          { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 },
+          { delayMs: 10 },
+        )
+        await apiConfirmReservation(userA, buildConfirmPayload(d.body.draft), makeUuid(), {
+          delayMs: 10,
+        })
+        syncSnapshot()
+        await loadOrders(userA)
+        setStatusNotice({
+          tone: 'success',
+          message:
+            'Đã tạo sẵn 1 đơn ACTIVE tại ST-01 (tồn kho FAM_A giảm 6 → 5). Thử hủy ngay hoặc tua +15p để kiểm tra AE-16b.',
+        })
+        return
+      }
+
+      if (scenarioId === 'stock-race') {
+        setSelectedStationId('ST-01')
+        setStationStock('ST-01', 'FAM_A', 1)
+        const opened = await openDraft(
+          { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 },
+          userA,
+        )
+        setStationStock('ST-01', 'FAM_A', 0)
+        syncSnapshot()
+        if (opened) {
+          const res = await apiConfirmReservation(userA, buildConfirmPayload(opened), makeUuid(), {
+            delayMs: 10,
+          })
+          setConfirmError(res.body.error)
+        }
+        return
+      }
+
+      if (scenarioId === 'draft-stale') {
+        setSelectedStationId('ST-01')
+        const opened = await openDraft(
+          { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 },
+          userA,
+        )
+        advanceServerClock(5 * 60 + 5)
+        syncSnapshot()
+        if (opened) {
+          const res = await apiConfirmReservation(userA, buildConfirmPayload(opened), makeUuid(), {
+            delayMs: 10,
+          })
+          setConfirmError(res.body.error)
+        }
+        return
+      }
+
+      if (scenarioId === 'lost-response') {
+        setSelectedStationId('ST-01')
+        await openDraft(
+          { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 },
+          userA,
+          { faultMode: 'lost_response_after_commit' },
+        )
+        setScenarioHint(
+          'AE-11 / AE-21: Nhấn "Xác nhận đặt 1 pin" → hệ thống mô phỏng mất phản hồi sau khi đã giữ pin, sau đó nhấn "Đối soát bằng khóa cũ" để gửi lại đúng 4 trường payload + Idempotency-Key gốc.',
+        )
+        return
+      }
+
+      if (scenarioId === 'ownership-session') {
+        const d = await apiCreateDraft(
+          userA,
+          { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 },
+          { delayMs: 10 },
+        )
+        const c = await apiConfirmReservation(userA, buildConfirmPayload(d.body.draft), makeUuid(), {
+          delayMs: 10,
+        })
+        const orderIdOfA = c.body.reservation.reservation_id
+        const userB = makeSession('USER-B')
+        setSession(userB)
+        syncSnapshot()
+        await loadOrders(userB)
+        const probe = await apiGetReservationDetail(userB, orderIdOfA, { delayMs: 10 })
+        setLookupError(probe.body.error)
+        setScenarioHint(
+          `AE-14: Đã chuyển sang USER-B và thử xem đơn ${orderIdOfA} của USER-A → máy chủ trả 404 RESERVATION_NOT_FOUND mà không lộ dữ liệu.`,
+        )
+        return
+      }
+
+      if (scenarioId === 'nearest-eligible') {
+        const st05 = getStoreSnapshot().stations.find((s) => s.station_id === 'ST-05')
+        await openDraft(
+          {
+            family_code: 'FAM_A',
+            quantity: 1,
+            nearest: { lat: st05.coordinates.lat, lng: st05.coordinates.lng },
+          },
+          userA,
+        )
+      }
+    },
+    [loadOrders, openDraft, syncSnapshot],
+  )
 
   const selectedOrder = orders.find((o) => o.reservation_id === selectedOrderId) ?? null
   const st05Coords =
