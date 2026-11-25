@@ -1,8 +1,8 @@
-# Vinergy — Hợp đồng API & LLM Tool (v1.0 — Sprint 1)
+# Vinergy — Hợp đồng API & LLM Tool (v2.0 — Sprint 1 + đặt pin Sprint 2)
 
-> **Trạng thái:** Draft v1.0 — rev 2 (Sprint 1, Task 1.1.2) | **Phụ trách:** M2 (Vu Duy Quang), rà soát cùng M4, M6  
+> **Trạng thái:** §1–§5 v1.0 rev 2 (Task 1.1.2, M2). §6 Draft v2.0 (Task 2.1.3, M4 — Bui Quang Minh), chờ rà soát cùng M1, M2, M6 | **Phụ trách:** M2 (Vu Duy Quang) và M4  
 > **Tham chiếu:** [architecture.md](./architecture.md), [tool_schemas.json](./tool_schemas.json), [SRS.md](../requirements/SRS.md), [Acceptance_Examples_and_Sample_Data.md](../requirements/Acceptance_Examples_and_Sample_Data.md), [seed_stations_v0.json](../../data/seed_stations_v0.json)  
-> **Phạm vi:** Chốt hợp đồng cho Sprint 1 (§1–§5). §6 là định hướng tạm thời cho Sprint 2 và sẽ chốt ở task 2.1.3. Mọi ví dụ trong tài liệu được tính từ dữ liệu seed và khớp với giá trị đối chiếu của AE.
+> **Phạm vi:** Hợp đồng Sprint 1 (§1–§5) và hợp đồng đặt pin Sprint 2 (§6, thiết kế ở [Reservation_Design.md](../design/Reservation_Design.md)). Thêm endpoint là thay đổi tương thích nên vẫn dùng base path `/api/v1`. Mọi ví dụ trong tài liệu được tính từ dữ liệu seed và khớp với giá trị đối chiếu của AE.
 
 ---
 
@@ -98,7 +98,7 @@ Mỗi `code` gắn với đúng một HTTP status.
 | `503` | `UPSTREAM_UNAVAILABLE` | LLM provider trả lỗi hoặc không kết nối được (AE-21) | Spike S1 / S3 |
 | `504` | `UPSTREAM_TIMEOUT` | LLM provider vượt `LLM_TIMEOUT_MS` (AE-21) | Spike S1 / S3 |
 
-Mã lỗi dành cho Sprint 2 được giữ chỗ ở §6.2.
+Mã lỗi đặt pin (Sprint 2) nằm ở §6.11.
 
 ### 2.3. Mã `reason` trong `details`
 
@@ -117,6 +117,12 @@ Mã lỗi dành cho Sprint 2 được giữ chỗ ở §6.2.
 | `UNKNOWN_PARAM` | Tham số query không được định nghĩa |
 | `UNKNOWN_FIELD` | Trường JSON body không được định nghĩa |
 | `MISSING_PAIR` | Chỉ có một trong hai tham số `lat`/`lng` ở endpoint mà chúng là tùy chọn (`field` là tên tham số bị thiếu) |
+| `MUST_BE_ONE` | `quantity` là số nhưng không phải đúng số nguyên `1` (BR-05) |
+| `ONE_OF_REQUIRED` | Thiếu cả hai trường mà phải có đúng một (`station_id` / `nearest`) |
+| `MUTUALLY_EXCLUSIVE` | Có cùng lúc hai trường chỉ được có một |
+| `DRAFT_EXPIRED` | Trong `DRAFT_STALE`: bản nháp đã quá `expires_at` |
+| `CONTENT_MISMATCH` | Trong `DRAFT_STALE`: body xác nhận lệch nội dung bản nháp |
+| `CHARGING_ONLY`, `UNSUPPORTED_FAMILY`, `STATION_CLOSED`, `STATION_MAINTENANCE`, `OUT_OF_STOCK` | Trong `STATION_NOT_ELIGIBLE`: đúng giá trị `ineligibility_reason` của §4.2 |
 
 **Quy tắc phía client (FR-12):** phân biệt bốn trạng thái: `200` có kết quả, `200` rỗng, `4xx`/`5xx`, và lỗi mạng hoặc timeout. Không bao giờ hiển thị lỗi như một kết quả rỗng.
 
@@ -163,7 +169,7 @@ Yêu cầu `X-CSRF-Token`. Hủy phiên, xóa cookie, trả `204 No Content`.
 ### 3.4. Quy tắc chung
 
 - Endpoint cần phiên: `POST /api/v1/chat` và toàn bộ endpoint đặt pin (§6).
-- Mọi `user_id`, `owner` hay `demo_user` xuất hiện trong body, query hoặc tham số tool đều bị bỏ qua và **không bao giờ** được dùng để phân quyền (BR-10, AE-14).
+- Mọi `user_id`, `owner` hay `demo_user` xuất hiện trong body, query hoặc tham số tool **không bao giờ** được dùng để phân quyền (BR-10, AE-14). Ở endpoint HTTP, chúng là trường/tham số không khai báo nên bị từ chối `UNKNOWN_FIELD`/`UNKNOWN_PARAM` theo §1.2, §1.3 (trừ `demo_user` của §3.1).
 - Mọi `POST`/`PUT`/`PATCH`/`DELETE` có phiên đều bắt buộc header `X-CSRF-Token`, trừ §3.1.
 
 ---
@@ -589,33 +595,236 @@ Response `200 OK` (minh họa `LOC-01`, `SWAPPING`, `FAM_A`, `radius_km: 1`):
 
 ---
 
-## 6. Định hướng Sprint 2 (tạm thời, chốt ở 2.1.3)
+## 6. Đặt pin (Sprint 2)
 
-Mục này giữ chỗ tên endpoint và mã lỗi để v1 không phải thay đổi phá vỡ tương thích. Mọi endpoint ở đây yêu cầu phiên và `X-CSRF-Token` cho các thao tác ghi.
+> Chốt ở 2.1.3 (draft v2.1, chờ rà soát), đã đối chiếu 2.1.1. Thiết kế trạng thái, giao dịch và lý do: [Reservation_Design.md](../design/Reservation_Design.md). Các giá trị thời gian là cấu hình; ví dụ dùng đề xuất demo của M1 ở SRS §8: `DRAFT_TTL_MINUTES = 5` (tính từ lúc tạo nháp), `RESERVATION_HOLD_MINUTES = 15` (tính từ lúc xác nhận thành công). Một mốc hết hạn có hiệu lực đến ngay trước thời điểm đó (`now >= expires_at` là đã hết hạn).
+
+Mọi endpoint ở mục này:
+
+- Yêu cầu phiên demo (§3). `POST` yêu cầu thêm `X-CSRF-Token`.
+- Danh tính **chỉ** lấy từ phiên. Trường `user_id`, `owner`, `demo_user` trong body bị từ chối là `UNKNOWN_FIELD` (§1.3), không bao giờ được dùng để phân quyền (BR-10).
+- Đơn hoặc bản nháp của người khác trả `404` như không tồn tại (AE-14).
+- Response có `"is_simulated": true` và `Cache-Control: no-store`.
+- Thời gian lấy theo đồng hồ server (AD-07). Không có tham số hay header nào cho client đặt thời gian.
 
 ### 6.1. Endpoints
 
-| Endpoint | Mục đích | Ghi chú |
+| Endpoint | Mục đích | Thành công |
 | --- | --- | --- |
-| `POST /api/v1/reservation-drafts` | Tạo bản nháp, **không** giữ tồn kho (BR-06) | Body có `family_code`, `quantity` (phải là số nguyên `1`, BR-05) và một trong hai: `station_id`, hoặc `nearest: { lat, lng, radius_km? }` để server chọn trạm gần nhất đủ điều kiện (AE-18). Trả `draft_id`, `draft_revision`, `expires_at`. |
-| `POST /api/v1/reservations` | Xác nhận bản nháp | Body `{ draft_id, draft_revision, quantity }` (với `quantity` là số nguyên `1`, BR-05/BR-06), header `Idempotency-Key`. Tạo mới trả `201`. Gửi lại cùng khóa và cùng nội dung trả `200` với chính đơn gốc, kèm header `Idempotent-Replayed: true` (BR-08, AE-11). Baseline chưa giới hạn mỗi người chỉ có một đơn `ACTIVE`. |
-| `GET /api/v1/reservations` | Danh sách đơn của phiên hiện tại | Đối soát đơn quá hạn trước khi trả (BR-09) |
-| `GET /api/v1/reservations/{reservation_id}` | Chi tiết một đơn | Đơn của người khác trả `404` (AE-14) |
-| `POST /api/v1/reservations/{reservation_id}/cancel` | Hủy đơn `ACTIVE`, hoàn pin đúng một lần | Hủy tại hoặc sau `expires_at` trả `200` với `status: "EXPIRED"`, không trả lỗi (BR-09, AE-16b). Hủy lặp lại trả trạng thái kết thúc hiện tại. |
+| `POST /api/v1/reservation-drafts` | Tạo bản nháp, **không** giữ tồn kho (BR-06) | `201` + `draft` |
+| `GET /api/v1/reservation-drafts/{draft_id}` | Đọc lại bản nháp (tải lại trang, chat) | `200` + `draft` |
+| `POST /api/v1/reservations` | Xác nhận bản nháp, giữ đúng 1 pin (BR-07, BR-08) | `201` đơn mới, hoặc `200` khi gửi lại cùng khóa |
+| `GET /api/v1/reservations` | Danh sách đơn của phiên hiện tại | `200` + `reservations` |
+| `GET /api/v1/reservations/{reservation_id}` | Chi tiết một đơn | `200` + `reservation` |
+| `POST /api/v1/reservations/{reservation_id}/cancel` | Hủy đơn, hoàn pin đúng một lần | `200` + `reservation` |
 
-### 6.2. Mã lỗi giữ chỗ
+`draft_id` và `reservation_id` là UUID dạng chuẩn chữ thường (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`). Sai định dạng trả `400 INVALID_FORMAT`; đúng định dạng nhưng không có (hoặc của người khác) trả `404`.
 
-| HTTP | `error.code` | Khi nào |
+### 6.2. Quy tắc validate riêng
+
+| Trường | Quy tắc | `reason` khi sai |
 | --- | --- | --- |
-| `400` | `INVALID_INPUT` | Gồm cả `quantity` khác số nguyên `1` (AE-08) |
-| `404` | `DRAFT_NOT_FOUND` | Bản nháp không tồn tại hoặc thuộc người khác |
-| `404` | `RESERVATION_NOT_FOUND` | Đơn không tồn tại hoặc thuộc người khác |
-| `409` | `IDEMPOTENCY_KEY_REUSED` | Cùng khóa nhưng khác nội dung request (AE-12) |
-| `409` | `REQUEST_IN_PROGRESS` | Request cùng khóa đang được xử lý; kèm `Retry-After` (AE-11) |
-| `409` | `DRAFT_ALREADY_USED` | Bản nháp đã tạo đơn, gửi kèm khóa mới (AE-17) |
-| `409` | `DRAFT_STALE` | Bản nháp hết hạn hoặc `draft_revision` không khớp (AE-17) |
-| `409` | `STATION_NOT_ELIGIBLE` | Trạm không còn đủ điều kiện lúc xác nhận; `details[0].reason` là một giá trị `ineligibility_reason` (AE-10, AE-13) |
-| `409` | `NO_ELIGIBLE_STATION` | Yêu cầu "gần nhất" không có ứng viên trong phạm vi (AE-18) |
+| `quantity` | Bắt buộc, kiểu JSON `number`, đúng bằng số nguyên `1`. Từ chối `0`, `-1`, `2`, `1.5`, `1.0` (BR-05, AE-08). | Thiếu: `REQUIRED`. Không phải `number` (`"1"`, `true`, `[1]`, `null`): `NOT_A_NUMBER`. Số khác `1`: `MUST_BE_ONE` |
+| `family_code` | Bắt buộc, enum `FAM_A` \| `FAM_B` | `REQUIRED`, `NOT_IN_ENUM`, `INVALID_FORMAT` (không phải string) |
+| `station_id` | Khớp `^[A-Z0-9-]{1,32}$` | `INVALID_FORMAT` |
+| `station_id` / `nearest` (tạo bản nháp) | Có **đúng một** trong hai | Thiếu cả hai: `ONE_OF_REQUIRED` (`field: "station_id"`). Có cả hai: `MUTUALLY_EXCLUSIVE` (`field: "nearest"`) |
+| `nearest.lat`, `nearest.lng`, `nearest.radius_km` | Như `lat`, `lng`, `radius_km` của §4.3 nhưng là JSON `number`. `radius_km` tùy chọn. | `field` dùng dạng `nearest.lat`. Trường lạ trong `nearest`: `UNKNOWN_FIELD` |
+| Header `Idempotency-Key` (xác nhận) | Bắt buộc, khớp `^[A-Za-z0-9_-]{16,100}$` (UUID v4 là lựa chọn khuyến nghị) | `REQUIRED`, `INVALID_FORMAT` (`field: "Idempotency-Key"`) |
+| Body của `cancel` | Không có body, hoặc `{}` | Có trường: `UNKNOWN_FIELD` |
+
+Validator gom toàn bộ lỗi như §1.2. Thứ tự `details`: path, header, sau đó các trường body theo thứ tự trong bảng của endpoint, cuối cùng là trường lạ.
+
+### 6.3. Đối tượng `draft`
+
+| Trường | Kiểu | Ghi chú |
+| --- | --- | --- |
+| `draft_id` | string (UUID) | |
+| `status` | `OPEN` \| `USED` \| `EXPIRED` | Suy ra lúc đọc ([Reservation_Design.md §3.2](../design/Reservation_Design.md#32-bản-nháp)) |
+| `station` | object | `station_id`, `name`, `area_label`, `coordinates`, `distance_km`, `distance_display`. Khoảng cách là `null` nếu bản nháp tạo bằng `station_id`. |
+| `family_code` | string | |
+| `quantity` | integer | Luôn `1` |
+| `available_batteries` | integer \| null | Tồn kho **hiện tại** của nhóm tại trạm lúc đọc. Chỉ để hiển thị, **không được giữ**. |
+| `hold_minutes` | integer | Thời gian giữ pin nếu xác nhận ngay (`RESERVATION_HOLD_MINUTES`) |
+| `created_at`, `expires_at` | string (ISO 8601 UTC) | `expires_at` = hạn **xác nhận** bản nháp |
+| `reservation_id` | string \| null | Có giá trị khi `status = USED` |
+
+Đối tượng này chứa đủ nội dung cần hiện trước khi xác nhận (FR-06, 2.1.2): trạm, nhóm pin, số lượng, thời gian giữ, hạn xác nhận.
+
+### 6.4. `POST /api/v1/reservation-drafts`
+
+Body (chọn một trong hai cách chỉ định trạm):
+
+```json
+{ "family_code": "FAM_A", "quantity": 1, "station_id": "ST-01" }
+```
+
+```json
+{ "family_code": "FAM_A", "quantity": 1, "nearest": { "lat": 21.0032, "lng": 105.856, "radius_km": 5 } }
+```
+
+| Trường | Kiểu | Bắt buộc |
+| --- | --- | --- |
+| `family_code` | enum | Có |
+| `quantity` | number (= 1) | Có |
+| `station_id` | string | Một trong hai |
+| `nearest` | `{ lat, lng, radius_km? }` | Một trong hai |
+
+Xử lý:
+
+- `station_id`: trạm phải `booking_eligible = true` cho `family_code` lúc tạo (§4.2). Nếu không, trả `409 STATION_NOT_ELIGIBLE` với `details[0] = { "field": "station_id", "reason": <ineligibility_reason> }` (AE-03: ST-02 → `CHARGING_ONLY`). Trạm không tồn tại trả `404 STATION_NOT_FOUND`.
+- `nearest`: chạy tìm kiếm §4.3 với `service_type = SWAPPING`, `only_open = true` và `radius_km` nếu có, rồi chọn trạm **đầu tiên có `booking_eligible = true`**. Không mở rộng bán kính. Không có ứng viên trả `409 NO_ELIGIBLE_STATION` (AE-18).
+- Không thay đổi tồn kho (AE-09).
+
+Response `201 Created` — AE-18, vị trí trùng ST-05, lúc `2026-11-25T08:00:00Z`:
+
+```json
+{
+  "is_simulated": true,
+  "draft": {
+    "draft_id": "5f0c2a1e-7b3d-4c6e-9a10-2b4d6f8a0c11",
+    "status": "OPEN",
+    "station": {
+      "station_id": "ST-03",
+      "name": "Vinergy Demo Station 03",
+      "area_label": "Hai Ba Trung demo area",
+      "coordinates": { "lat": 21.0115, "lng": 105.8492 },
+      "distance_km": 1.1619073809919698,
+      "distance_display": "1.2 km"
+    },
+    "family_code": "FAM_A",
+    "quantity": 1,
+    "available_batteries": 8,
+    "hold_minutes": 15,
+    "created_at": "2026-11-25T08:00:00Z",
+    "expires_at": "2026-11-25T08:05:00Z",
+    "reservation_id": null
+  }
+}
+```
+
+ST-05 đứng đầu tìm kiếm ở 0.0 km nhưng hết pin A, nên không được chọn.
+
+### 6.5. `GET /api/v1/reservation-drafts/{draft_id}`
+
+Trả `200` với cùng cấu trúc §6.4, `status` và `available_batteries` tính lại lúc đọc. Không có, hoặc của người khác: `404 DRAFT_NOT_FOUND`.
+
+### 6.6. Đối tượng `reservation`
+
+| Trường | Kiểu | Ghi chú |
+| --- | --- | --- |
+| `reservation_id` | string (UUID) | |
+| `status` | `ACTIVE` \| `CANCELLED` \| `EXPIRED` | Đã đối soát hết hạn trước khi trả (BR-09) |
+| `draft_id` | string (UUID) | |
+| `station` | object | `station_id`, `name`, `area_label`, `coordinates` |
+| `family_code` | string | |
+| `quantity` | integer | Luôn `1` |
+| `created_at` | string | Thời điểm xác nhận |
+| `expires_at` | string | Hết thời gian giữ pin |
+| `cancelled_at`, `expired_at` | string \| null | Đúng một trường có giá trị khi đơn đã kết thúc |
+
+### 6.7. `POST /api/v1/reservations`
+
+Header `Idempotency-Key: 8b2f6c1a-3d4e-4f5a-9b6c-7d8e9f0a1b2c`. Body lặp lại nội dung của bản nháp người dùng đã thấy:
+
+```json
+{ "draft_id": "9a7e3c52-1f4b-4d8a-b6c2-0e5f7a9b1d34", "station_id": "ST-01", "family_code": "FAM_A", "quantity": 1 }
+```
+
+Thứ tự xử lý (sau §1.3 bước 1–5):
+
+1. Khóa đã gắn với đơn và body giống hệt → **gửi lại**: trả đơn gốc ở trạng thái hiện tại, `200 OK`, header `Idempotent-Replayed: true`. Không kiểm tra hạn bản nháp, trạm hay tồn kho; không giữ thêm pin (BR-08, AE-11).
+2. Khóa đã gắn với đơn nhưng body khác → `409 IDEMPOTENCY_KEY_REUSED` (AE-12).
+3. Bản nháp không có hoặc của người khác → `404 DRAFT_NOT_FOUND`.
+4. Bản nháp đã tạo đơn (với khóa khác) → `409 DRAFT_ALREADY_USED` (AE-17).
+5. Body lệch `station_id`/`family_code`/`quantity` của bản nháp → `409 DRAFT_STALE`, `reason: CONTENT_MISMATCH`.
+6. Bản nháp hết hạn → `409 DRAFT_STALE`, `reason: DRAFT_EXPIRED`.
+7. Trạm không `OPEN` hoặc hết pin → `409 STATION_NOT_ELIGIBLE` với `reason` `STATION_CLOSED` \| `STATION_MAINTENANCE` \| `OUT_OF_STOCK` (AE-10, AE-13).
+8. Còn lại: trừ 1 pin, tạo đơn `ACTIVE`, `201 Created`, header `Location: /api/v1/reservations/{reservation_id}`.
+
+Yêu cầu bị từ chối không lưu gì: có thể thử lại cùng khóa sau khi sửa nguyên nhân. Nếu một yêu cầu cùng khóa đang xử lý quá `IDEMPOTENCY_LOCK_TIMEOUT_MS`, trả `409 REQUEST_IN_PROGRESS` kèm `Retry-After: 1`; client gửi lại **cùng khóa, cùng body**.
+
+Response `201 Created` — AE-10/AE-10b, nháp tạo lúc `08:00:00Z`, xác nhận lúc `2026-11-25T08:04:00Z` (trước hạn nháp 08:05), tồn kho ST-01/FAM_A từ 6 còn 5, giữ đến 08:19:
+
+```json
+{
+  "is_simulated": true,
+  "reservation": {
+    "reservation_id": "3c9d1e7a-2b5f-4a8c-9d0e-1f2a3b4c5d6e",
+    "status": "ACTIVE",
+    "draft_id": "9a7e3c52-1f4b-4d8a-b6c2-0e5f7a9b1d34",
+    "station": {
+      "station_id": "ST-01",
+      "name": "Vinergy Demo Station 01",
+      "area_label": "Hai Ba Trung demo area",
+      "coordinates": { "lat": 21.005, "lng": 105.8435 }
+    },
+    "family_code": "FAM_A",
+    "quantity": 1,
+    "created_at": "2026-11-25T08:04:00Z",
+    "expires_at": "2026-11-25T08:19:00Z",
+    "cancelled_at": null,
+    "expired_at": null
+  }
+}
+```
+
+Response `409` — AE-13, người thứ hai tranh viên pin cuối:
+
+```json
+{
+  "error": {
+    "code": "STATION_NOT_ELIGIBLE",
+    "message": "Trạm không còn đủ điều kiện đặt pin.",
+    "details": [ { "field": "station_id", "reason": "OUT_OF_STOCK", "message": "Trạm đã hết pin FAM_A khả dụng." } ]
+  },
+  "request_id": "req_01JD7K2M3N4P5Q6R7S8T9V0W1X"
+}
+```
+
+### 6.8. `GET /api/v1/reservations`
+
+Query tùy chọn `status` (`ACTIVE` \| `CANCELLED` \| `EXPIRED`), theo quy tắc §1.2. Đối soát mọi đơn `ACTIVE` quá hạn **của người dùng** trước khi đọc. Sắp xếp `created_at` giảm dần, rồi `reservation_id` tăng dần. Không phân trang.
+
+```json
+{ "is_simulated": true, "query": { "status": null }, "total": 1, "reservations": [ { "reservation_id": "…", "status": "ACTIVE" } ] }
+```
+
+(Mỗi phần tử là đối tượng §6.6 đầy đủ; rút gọn ở đây.)
+
+### 6.9. `GET /api/v1/reservations/{reservation_id}`
+
+`200` với `{ "is_simulated": true, "reservation": { … } }`, sau khi đối soát hết hạn. Không có, hoặc của người khác: `404 RESERVATION_NOT_FOUND`.
+
+### 6.10. `POST /api/v1/reservations/{reservation_id}/cancel`
+
+Không có body (hoặc `{}`). Luôn `200` với đơn ở trạng thái sau thao tác:
+
+| Trạng thái trước | Thời điểm | Kết quả | Tồn kho |
+| --- | --- | --- | --- |
+| `ACTIVE` | `now < expires_at` | `CANCELLED` (AE-15, AE-16a) | +1 |
+| `ACTIVE` | `now >= expires_at` | `EXPIRED`, không phải lỗi (AE-16b) | +1 |
+| `CANCELLED` / `EXPIRED` | bất kỳ | Giữ nguyên trạng thái | Không đổi |
+
+Hủy lặp lại không bao giờ hoàn pin lần hai (AE-15, AE-16d). Không có hoặc của người khác: `404 RESERVATION_NOT_FOUND`, không đổi tồn kho (AE-14).
+
+### 6.11. Mã lỗi đặt pin
+
+Bổ sung vào bảng §2.2. Mỗi mã gắn một HTTP status.
+
+| HTTP | `error.code` | Khi nào | AE |
+| --- | --- | --- | --- |
+| `400` | `INVALID_INPUT` | Gồm `quantity` khác số nguyên `1`, thiếu/sai `Idempotency-Key` | AE-08 |
+| `404` | `DRAFT_NOT_FOUND` | Bản nháp không tồn tại hoặc thuộc người khác | AE-14, AE-17 |
+| `404` | `RESERVATION_NOT_FOUND` | Đơn không tồn tại hoặc thuộc người khác | AE-14 |
+| `409` | `IDEMPOTENCY_KEY_REUSED` | Cùng khóa, khác body | AE-12 |
+| `409` | `REQUEST_IN_PROGRESS` | Yêu cầu cùng khóa đang xử lý quá thời gian chờ; kèm `Retry-After` | AE-11 |
+| `409` | `DRAFT_ALREADY_USED` | Bản nháp đã tạo đơn, gửi kèm khóa khác | AE-17 |
+| `409` | `DRAFT_STALE` | Bản nháp hết hạn (`DRAFT_EXPIRED`) hoặc body lệch nội dung bản nháp (`CONTENT_MISMATCH`) | AE-17 |
+| `409` | `STATION_NOT_ELIGIBLE` | Trạm không đủ điều kiện lúc tạo bản nháp hoặc xác nhận; `details[0].reason` là một `ineligibility_reason` | AE-03, AE-10, AE-13 |
+| `409` | `NO_ELIGIBLE_STATION` | `nearest` không có trạm đủ điều kiện trong phạm vi | AE-18 |
+| `409` | `ACTIVE_RESERVATION_LIMIT` | **Dự phòng.** Đề xuất 2.1.1 cho phép nhiều đơn `ACTIVE` (AE-11a), nên mã này không dùng trừ khi nhóm đổi chính sách | — |
+
+Thay đổi so với bản tạm rev 2: bỏ `draft_revision` (bản nháp bất biến, mỗi `draft_id` là một phiên bản); body xác nhận lặp lại `station_id`, `family_code`; thêm `GET /reservation-drafts/{draft_id}`; `DRAFT_STALE` có `reason` để phân biệt hết hạn và lệch nội dung.
 
 ---
 
@@ -628,9 +837,15 @@ Mục này giữ chỗ tên endpoint và mã lỗi để v1 không phải thay �
 | AE-03 | §4.2 (ST-02 `CHARGING_ONLY`), §4.3 điều kiện lọc |
 | AE-05, AE-07f | §2.1, §2.3 quy tắc phía client, §4.3 (ví dụ kết quả rỗng) |
 | AE-07a…e | §1.2, §2.3, §4.3 |
-| AE-08…AE-17 | §6 (Sprint 2) |
-| AE-14, AE-23f | §3.4, §5.2, §6.1 |
-| AE-18 | §6.1 (`nearest`), §6.2 `NO_ELIGIBLE_STATION` |
+| AE-08 | §6.2 (`MUST_BE_ONE`) |
+| AE-09, AE-09a | §6.3 (`expires_at`, `hold_minutes`), §6.4 (không trừ tồn kho), §6.7 bước 6 |
+| AE-10, AE-10a, AE-13 | §6.4 (`STATION_NOT_ELIGIBLE` lúc tạo nháp), §6.7 bước 7–8, ví dụ `409 OUT_OF_STOCK` |
+| AE-10b | §6.6, ví dụ `201` của §6.7, §6.9 |
+| AE-11, AE-11a, AE-12 | §6.7 bước 1–2, `REQUEST_IN_PROGRESS`, §6.11 `ACTIVE_RESERVATION_LIMIT` (không dùng) |
+| AE-15, AE-16 | §6.10 |
+| AE-17 | §6.7 bước 3–6 |
+| AE-14, AE-23f | §3.4, §5.2, §6 (đầu mục), §6.5, §6.9, §6.10 |
+| AE-18 | §6.4 (`nearest`, ví dụ ST-03), §6.11 `NO_ELIGIBLE_STATION` |
 | AE-19 | §4.2 (eligibility không phụ thuộc `service_type`), §5.2 |
 | AE-20 | §5.1, §5.4 |
 | AE-21 | §2.2 (`503`/`504`), §5.5, §5.6 `fallback` |
@@ -643,3 +858,5 @@ Mục này giữ chỗ tên endpoint và mã lỗi để v1 không phải thay �
 | --- | --- | --- |
 | rev 1 | — | Bản nháp đầu tiên |
 | rev 2 | 2026-11-13 | Sửa ví dụ search theo AE-01. Mỗi mã lỗi gắn một HTTP status, bổ sung thứ tự middleware và quy tắc body JSON. Thêm quy tắc parse query và mã `reason`. Thêm hợp đồng phiên demo và CSRF. Định nghĩa đối tượng `Station` và thuật toán eligibility có thứ tự, kèm bảng đối chiếu. Thêm `family_code`, `lat`, `lng` cho endpoint chi tiết. Đồng bộ `tool_schemas.json` v1.0 (bỏ `lat`/`lng`, thêm `result_schemas`), ngữ cảnh chèn, kết quả/lỗi tool, giới hạn orchestrator và `/chat` tạm thời khớp schema. Giữ chỗ mã lỗi Sprint 2. |
+| v2.0 draft | 2026-11-23 | (2.1.3, M4) Thay §6 tạm thời bằng hợp đồng đặt pin đầy đủ: đối tượng `draft`/`reservation`, 6 endpoint, quy tắc validate `quantity`/`Idempotency-Key`/`nearest`, thứ tự xử lý xác nhận và gửi lại, bảng hủy theo thời điểm, mã lỗi §6.11. Bỏ `draft_revision` (bản nháp bất biến), body xác nhận lặp lại `station_id`/`family_code`, thêm `GET /reservation-drafts/{draft_id}`, thêm `reason` mới vào §2.3. |
+| v2.1 draft | 2026-11-24 | (2.1.3, M4) Đối chiếu 2.1.1: ví dụ dùng hạn nháp 5 phút và giữ pin 15 phút (AE-09a, AE-10b); `ACTIVE_RESERVATION_LIMIT` ghi rõ không dùng theo đề xuất cho phép nhiều đơn (AE-11a); bổ sung truy vết AE-09a/10a/10b/11a. §3.4: thống nhất với §1.3 — `user_id`/`owner` trong body/query bị từ chối là trường lạ, không còn ghi "bị bỏ qua". |
