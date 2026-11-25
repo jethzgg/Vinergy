@@ -295,3 +295,208 @@ function buildRequestHash({ draft_id, station_id, family_code, quantity }) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* POST /api/v1/reservation-drafts (§6.4)                                     */
+/* -------------------------------------------------------------------------- */
+
+const CREATE_DRAFT_FIELDS = new Set(['family_code', 'quantity', 'station_id', 'nearest'])
+const NEAREST_FIELDS = new Set(['lat', 'lng', 'radius_km'])
+
+export function createDraft(store, session, body) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return errorResponse(400, 'INVALID_INPUT', 'Nội dung yêu cầu không hợp lệ.', [])
+  }
+
+  const details = []
+  validateFamilyCode(body.family_code, details)
+  validateQuantity(body.quantity, details)
+
+  const hasStationId = body.station_id !== undefined
+  const hasNearest = body.nearest !== undefined
+
+  if (!hasStationId && !hasNearest) {
+    details.push({
+      field: 'station_id',
+      reason: 'ONE_OF_REQUIRED',
+      message: 'Cần truyền một trong hai: station_id hoặc nearest.',
+    })
+  } else if (hasStationId && hasNearest) {
+    details.push({
+      field: 'nearest',
+      reason: 'MUTUALLY_EXCLUSIVE',
+      message: 'Không được truyền đồng thời cả station_id và nearest.',
+    })
+  }
+
+  if (hasStationId && !hasNearest) {
+    if (typeof body.station_id !== 'string' || !STATION_ID_RE.test(body.station_id)) {
+      details.push({
+        field: 'station_id',
+        reason: 'INVALID_FORMAT',
+        message: 'station_id không đúng định dạng.',
+      })
+    }
+  }
+
+  if (hasNearest && !hasStationId) {
+    if (!body.nearest || typeof body.nearest !== 'object' || Array.isArray(body.nearest)) {
+      details.push({
+        field: 'nearest',
+        reason: 'INVALID_FORMAT',
+        message: 'nearest phải là đối tượng chứa lat, lng và radius_km (tùy chọn).',
+      })
+    } else {
+      const { lat, lng, radius_km } = body.nearest
+      if (lat === undefined) {
+        details.push({ field: 'nearest.lat', reason: 'REQUIRED', message: 'nearest.lat là bắt buộc.' })
+      } else if (typeof lat !== 'number' || !Number.isFinite(lat)) {
+        details.push({ field: 'nearest.lat', reason: 'NOT_A_NUMBER', message: 'nearest.lat phải là số hữu hạn.' })
+      } else if (lat < -90 || lat > 90) {
+        details.push({ field: 'nearest.lat', reason: 'OUT_OF_RANGE', message: 'nearest.lat phải nằm trong [-90, 90].' })
+      }
+
+      if (lng === undefined) {
+        details.push({ field: 'nearest.lng', reason: 'REQUIRED', message: 'nearest.lng là bắt buộc.' })
+      } else if (typeof lng !== 'number' || !Number.isFinite(lng)) {
+        details.push({ field: 'nearest.lng', reason: 'NOT_A_NUMBER', message: 'nearest.lng phải là số hữu hạn.' })
+      } else if (lng < -180 || lng > 180) {
+        details.push({ field: 'nearest.lng', reason: 'OUT_OF_RANGE', message: 'nearest.lng phải nằm trong [-180, 180].' })
+      }
+
+      if (radius_km !== undefined && radius_km !== null) {
+        if (typeof radius_km !== 'number' || !Number.isFinite(radius_km)) {
+          details.push({ field: 'nearest.radius_km', reason: 'NOT_A_NUMBER', message: 'nearest.radius_km phải là số.' })
+        } else if (radius_km <= 0) {
+          details.push({ field: 'nearest.radius_km', reason: 'NOT_POSITIVE', message: 'nearest.radius_km phải lớn hơn 0.' })
+        }
+      }
+
+      validateUnknownFields(body.nearest, NEAREST_FIELDS, details, 'nearest')
+    }
+  }
+
+  validateUnknownFields(body, CREATE_DRAFT_FIELDS, details)
+
+  if (details.length > 0) {
+    return errorResponse(400, 'INVALID_INPUT', 'Một hoặc nhiều tham số không hợp lệ.', details)
+  }
+
+  let selectedStation = null
+  let distanceKm = null
+
+  if (hasNearest) {
+    const origin = { lat: body.nearest.lat, lng: body.nearest.lng }
+    const radius = body.nearest.radius_km ?? null
+    const candidates = store.stations
+      .filter((s) => evaluateBooking(s, body.family_code).booking_eligible)
+      .map((s) => ({ station: s, distance_km: haversineKm(origin, s.coordinates) }))
+      .filter((c) => (radius === null ? true : c.distance_km <= radius))
+      .sort((a, b) =>
+        a.distance_km === b.distance_km
+          ? a.station.station_id.localeCompare(b.station.station_id)
+          : a.distance_km - b.distance_km,
+      )
+
+    if (candidates.length === 0) {
+      return errorResponse(
+        409,
+        'NO_ELIGIBLE_STATION',
+        radius !== null
+          ? `Không có trạm đổi pin ${body.family_code} nào đủ điều kiện trong bán kính ${radius} km.`
+          : `Hiện không có trạm đổi pin ${body.family_code} nào còn pin khả dụng.`,
+      )
+    }
+
+    selectedStation = candidates[0].station
+    distanceKm = candidates[0].distance_km
+  } else {
+    selectedStation = store.stations.find((s) => s.station_id === body.station_id) ?? null
+    if (!selectedStation) {
+      return errorResponse(404, 'STATION_NOT_FOUND', 'Không tìm thấy trạm với mã đã cho.')
+    }
+    const verdict = evaluateBooking(selectedStation, body.family_code)
+    if (!verdict.booking_eligible) {
+      return errorResponse(
+        409,
+        'STATION_NOT_ELIGIBLE',
+        INELIGIBILITY_TEXT[verdict.ineligibility_reason] ?? 'Trạm không đủ điều kiện đặt pin.',
+        [
+          {
+            field: 'station_id',
+            reason: verdict.ineligibility_reason,
+            message: INELIGIBILITY_TEXT[verdict.ineligibility_reason],
+          },
+        ],
+      )
+    }
+  }
+
+  const createdAt = getNowIso(store)
+  const expiresAt = new Date(store.nowMs + store.config.draftTtlMinutes * 60 * 1000).toISOString()
+
+  const record = {
+    draft_id: makeUuid(),
+    owner_id: session.demo_user,
+    station_id: selectedStation.station_id,
+    station_name: selectedStation.name,
+    area_label: selectedStation.area_label,
+    coordinates: { ...selectedStation.coordinates },
+    distance_km: distanceKm,
+    distance_display: distanceKm === null ? null : formatDistance(distanceKm),
+    family_code: body.family_code,
+    quantity: 1,
+    hold_minutes: store.config.holdMinutes,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    reservation_id: null,
+  }
+
+  // BR-06 / AE-09: Draft never holds stock.
+  store.drafts.set(record.draft_id, record)
+
+  return {
+    status: 201,
+    ok: true,
+    headers: { 'Cache-Control': 'no-store' },
+    body: {
+      is_simulated: true,
+      draft: projectDraft(store, record),
+      request_id: makeRequestId(),
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* GET /api/v1/reservation-drafts/{draft_id} (§6.5)                           */
+/* -------------------------------------------------------------------------- */
+
+export function getDraftDetail(store, session, draftId) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  if (typeof draftId !== 'string' || !UUID_RE.test(draftId)) {
+    return errorResponse(400, 'INVALID_INPUT', 'Mã bản nháp không đúng định dạng UUID.', [
+      { field: 'draft_id', reason: 'INVALID_FORMAT', message: 'draft_id phải là UUID chữ thường.' },
+    ])
+  }
+
+  const record = store.drafts.get(draftId)
+  if (!record || record.owner_id !== session.demo_user) {
+    return errorResponse(404, 'DRAFT_NOT_FOUND', 'Không tìm thấy bản nháp trong phiên hiện tại.')
+  }
+
+  return {
+    status: 200,
+    ok: true,
+    headers: { 'Cache-Control': 'no-store' },
+    body: {
+      is_simulated: true,
+      draft: projectDraft(store, record),
+      request_id: makeRequestId(),
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
