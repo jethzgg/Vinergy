@@ -723,3 +723,171 @@ export function confirmReservation(store, session, body, idempotencyKey) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* GET /api/v1/reservations & GET /api/v1/reservations/{id} (§6.8, §6.9)      */
+/* -------------------------------------------------------------------------- */
+
+export function listReservations(store, session, query = {}) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  const statusFilter = query?.status ?? null
+  if (statusFilter !== null && !RESERVATION_STATUSES.includes(statusFilter)) {
+    return errorResponse(400, 'INVALID_INPUT', 'Tham số status không hợp lệ.', [
+      {
+        field: 'status',
+        reason: 'NOT_IN_ENUM',
+        message: 'status phải là ACTIVE, CANCELLED hoặc EXPIRED.',
+      },
+    ])
+  }
+
+  const owned = []
+  for (const record of store.reservations.values()) {
+    if (record.owner_id !== session.demo_user) continue
+    reconcileReservationExpiry(store, record)
+    if (statusFilter && record.status !== statusFilter) continue
+    owned.push(projectReservation(record))
+  }
+
+  // §6.8: Sort created_at DESC, then reservation_id ASC.
+  owned.sort((a, b) => {
+    const diff = Date.parse(b.created_at) - Date.parse(a.created_at)
+    return diff !== 0 ? diff : a.reservation_id.localeCompare(b.reservation_id)
+  })
+
+  return {
+    status: 200,
+    ok: true,
+    headers: { 'Cache-Control': 'no-store' },
+    body: {
+      is_simulated: true,
+      query: { status: statusFilter },
+      total: owned.length,
+      reservations: owned,
+      request_id: makeRequestId(),
+    },
+  }
+}
+
+export function getReservationDetail(store, session, reservationId) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  if (typeof reservationId !== 'string' || !UUID_RE.test(reservationId)) {
+    return errorResponse(400, 'INVALID_INPUT', 'Mã đơn không đúng định dạng UUID.', [
+      {
+        field: 'reservation_id',
+        reason: 'INVALID_FORMAT',
+        message: 'reservation_id phải là UUID chữ thường.',
+      },
+    ])
+  }
+
+  const record = store.reservations.get(reservationId)
+  // AE-14: Non-owner receives 404 without leaking order existence or details.
+  if (!record || record.owner_id !== session.demo_user) {
+    return errorResponse(
+      404,
+      'RESERVATION_NOT_FOUND',
+      'Không tìm thấy đơn đặt pin trong phiên hiện tại.',
+    )
+  }
+
+  reconcileReservationExpiry(store, record)
+
+  return {
+    status: 200,
+    ok: true,
+    headers: { 'Cache-Control': 'no-store' },
+    body: {
+      is_simulated: true,
+      reservation: projectReservation(record),
+      request_id: makeRequestId(),
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* POST /api/v1/reservations/{id}/cancel (§6.10)                              */
+/* -------------------------------------------------------------------------- */
+
+export function cancelReservation(store, session, reservationId, body = undefined) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  const details = []
+  if (typeof reservationId !== 'string' || !UUID_RE.test(reservationId)) {
+    details.push({
+      field: 'reservation_id',
+      reason: 'INVALID_FORMAT',
+      message: 'reservation_id phải là UUID chữ thường.',
+    })
+  }
+  if (body !== undefined && body !== null) {
+    if (typeof body !== 'object' || Array.isArray(body)) {
+      details.push({ field: 'body', reason: 'INVALID_FORMAT', message: 'Body hủy đơn phải rỗng hoặc {}.' })
+    } else {
+      validateUnknownFields(body, new Set(), details)
+    }
+  }
+  if (details.length > 0) {
+    return errorResponse(400, 'INVALID_INPUT', 'Yêu cầu hủy đơn không hợp lệ.', details)
+  }
+
+  const record = store.reservations.get(reservationId)
+  if (!record || record.owner_id !== session.demo_user) {
+    return errorResponse(
+      404,
+      'RESERVATION_NOT_FOUND',
+      'Không tìm thấy đơn đặt pin trong phiên hiện tại.',
+    )
+  }
+
+  // BR-09 / AE-16b: Cancel at or after expires_at must reconcile to EXPIRED, never CANCELLED.
+  if (record.status === 'ACTIVE' && store.nowMs >= Date.parse(record.expires_at)) {
+    reconcileReservationExpiry(store, record)
+    return {
+      status: 200,
+      ok: true,
+      headers: { 'Cache-Control': 'no-store' },
+      body: {
+        is_simulated: true,
+        reservation: projectReservation(record),
+        request_id: makeRequestId(),
+      },
+    }
+  }
+
+  // Terminal states: idempotent, never release stock a second time (AE-15, AE-16d).
+  if (record.status !== 'ACTIVE') {
+    return {
+      status: 200,
+      ok: true,
+      headers: { 'Cache-Control': 'no-store' },
+      body: {
+        is_simulated: true,
+        reservation: projectReservation(record),
+        request_id: makeRequestId(),
+      },
+    }
+  }
+
+  // Conditional transition ACTIVE -> CANCELLED before expires_at, release stock once.
+  const station = store.stations.find((s) => s.station_id === record.station.station_id)
+  if (station && typeof station.available_batteries_by_family?.[record.family_code] === 'number') {
+    station.available_batteries_by_family[record.family_code] += 1
+  }
+  record.status = 'CANCELLED'
+  record.cancelled_at = getNowIso(store)
+
+  return {
+    status: 200,
+    ok: true,
+    headers: { 'Cache-Control': 'no-store' },
+    body: {
+      is_simulated: true,
+      reservation: projectReservation(record),
+      request_id: makeRequestId(),
+    },
+  }
+}
