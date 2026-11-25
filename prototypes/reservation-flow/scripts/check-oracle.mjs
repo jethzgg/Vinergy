@@ -152,5 +152,68 @@ check('AE-10 atomic confirmation holds exactly 1 battery and preserves other cou
   assert.equal(portsOf(store, 'ST-01', 'FAM_A'), 3)
 })
 
+// AE-11: Idempotent replay returns same order even after draft expires or stock drops to 0
+check('AE-11 idempotent replay with exact 4-field payload returns original order after draft expires', () => {
+  const store = createReservationStore(fixture)
+  const draft = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const payload = confirmPayloadFrom(draft)
+  const key = makeUuid()
+  const first = confirmReservation(store, sessionA, payload, key)
+  assert.equal(first.status, 201)
+
+  advanceClock(store, 6 * 60)
+  store.stations.find((s) => s.station_id === 'ST-01').available_batteries_by_family.FAM_A = 0
+
+  const replay = confirmReservation(store, sessionA, payload, key)
+  assert.equal(replay.status, 200)
+  assert.equal(replay.headers['Idempotent-Replayed'], 'true')
+  assert.equal(replay.body.reservation.reservation_id, first.body.reservation.reservation_id)
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 0)
+})
+
+// AE-12: Reusing same idempotency key with different payload returns 409 IDEMPOTENCY_KEY_REUSED
+check('AE-12 same idempotency key with different payload returns 409 conflict', () => {
+  const store = createReservationStore(fixture)
+  const d1 = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const d2 = createDraft(store, sessionA, { station_id: 'ST-03', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const key = makeUuid()
+  assert.equal(confirmReservation(store, sessionA, confirmPayloadFrom(d1), key).status, 201)
+  const conflict = confirmReservation(store, sessionA, confirmPayloadFrom(d2), key)
+  assert.equal(conflict.status, 409)
+  assert.equal(conflict.body.error.code, 'IDEMPOTENCY_KEY_REUSED')
+  assert.equal(stockOf(store, 'ST-03', 'FAM_A'), 8)
+})
+
+// AE-13: Last battery contention — only one succeeds, stock never negative
+check('AE-13 last battery contention allows only one order and never goes negative', () => {
+  const store = createReservationStore(fixture)
+  store.stations.find((s) => s.station_id === 'ST-01').available_batteries_by_family.FAM_A = 1
+  const dA = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const dB = createDraft(store, sessionB, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+
+  const resA = confirmReservation(store, sessionA, confirmPayloadFrom(dA), makeUuid())
+  const resB = confirmReservation(store, sessionB, confirmPayloadFrom(dB), makeUuid())
+
+  assert.equal(resA.status, 201)
+  assert.equal(resB.status, 409)
+  assert.equal(resB.body.error.code, 'STATION_NOT_ELIGIBLE')
+  assert.equal(resB.body.error.details[0].reason, 'OUT_OF_STOCK')
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 0)
+})
+
+// AE-14: Ownership enforcement + §6.12 #11 UUID format check
+check('AE-14 non-owner view/cancel returns 404 and invalid UUID returns 400 INVALID_FORMAT', () => {
+  const store = createReservationStore(fixture)
+  const draft = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const orderId = confirmReservation(store, sessionA, confirmPayloadFrom(draft), makeUuid()).body.reservation
+    .reservation_id
+
+  assert.equal(getReservationDetail(store, sessionB, orderId).status, 404)
+  assert.equal(cancelReservation(store, sessionB, orderId).status, 404)
+  assert.equal(getReservationDetail(store, sessionA, 'res_not_a_uuid').status, 400)
+  assert.equal(getReservationDetail(store, sessionA, 'res_not_a_uuid').body.error.details[0].reason, 'INVALID_FORMAT')
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 5)
+})
+
 
 console.log(`\nAll ${passed} oracle checks passed.`)
