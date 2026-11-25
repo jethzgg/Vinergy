@@ -215,5 +215,104 @@ check('AE-14 non-owner view/cancel returns 404 and invalid UUID returns 400 INVA
   assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 5)
 })
 
+// AE-15: Cancel before expiry restores stock once; response has only reservation (§6.12 #8)
+check('AE-15 cancel restores stock once and repeated cancel is idempotent', () => {
+  const store = createReservationStore(fixture)
+  const draft = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const orderId = confirmReservation(store, sessionA, confirmPayloadFrom(draft), makeUuid()).body.reservation
+    .reservation_id
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 5)
+
+  const c1 = cancelReservation(store, sessionA, orderId)
+  assert.equal(c1.status, 200)
+  assert.equal(c1.body.reservation.status, 'CANCELLED')
+  assert.equal(c1.body.released_stock, undefined)
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 6)
+
+  const c2 = cancelReservation(store, sessionA, orderId)
+  assert.equal(c2.status, 200)
+  assert.equal(c2.body.reservation.status, 'CANCELLED')
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 6)
+})
+
+// AE-16b & AE-16d: Cancel at/after expires_at reconciles to EXPIRED and releases once
+check('AE-16b cancel at/after expires_at reconciles to EXPIRED (never CANCELLED) and releases once', () => {
+  const store = createReservationStore(fixture)
+  const draft = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const orderId = confirmReservation(store, sessionA, confirmPayloadFrom(draft), makeUuid()).body.reservation
+    .reservation_id
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 5)
+
+  advanceClock(store, 15 * 60)
+  const cancelAtExpiry = cancelReservation(store, sessionA, orderId)
+  assert.equal(cancelAtExpiry.status, 200)
+  assert.equal(cancelAtExpiry.body.reservation.status, 'EXPIRED')
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 6)
+
+  assert.equal(sweepExpiredReservations(store), 0)
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 6)
+})
+
+// AE-17: DRAFT_EXPIRED, CONTENT_MISMATCH & DRAFT_ALREADY_USED (§6.12 #10)
+check('AE-17 distinguishes DRAFT_EXPIRED, CONTENT_MISMATCH and DRAFT_ALREADY_USED', () => {
+  const store = createReservationStore(fixture)
+  const dExpired = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  advanceClock(store, 5 * 60)
+  const staleRes = confirmReservation(store, sessionA, confirmPayloadFrom(dExpired), makeUuid())
+  assert.equal(staleRes.status, 409)
+  assert.equal(staleRes.body.error.code, 'DRAFT_STALE')
+  assert.equal(staleRes.body.error.details[0].reason, 'DRAFT_EXPIRED')
+
+  const dMismatch = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  const mismatchRes = confirmReservation(
+    store,
+    sessionA,
+    { draft_id: dMismatch.draft_id, station_id: 'ST-03', family_code: 'FAM_A', quantity: 1 },
+    makeUuid(),
+  )
+  assert.equal(mismatchRes.status, 409)
+  assert.equal(mismatchRes.body.error.code, 'DRAFT_STALE')
+  assert.equal(mismatchRes.body.error.details[0].reason, 'CONTENT_MISMATCH')
+
+  const dUsed = createDraft(store, sessionA, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.draft
+  assert.equal(confirmReservation(store, sessionA, confirmPayloadFrom(dUsed), makeUuid()).status, 201)
+  const reusedDraft = confirmReservation(store, sessionA, confirmPayloadFrom(dUsed), makeUuid())
+  assert.equal(reusedDraft.status, 409)
+  assert.equal(reusedDraft.body.error.code, 'DRAFT_ALREADY_USED')
+  assert.equal(stockOf(store, 'ST-01', 'FAM_A'), 5)
+})
+
+// AE-18: Nearest eligible skips zero-stock ST-05 and picks ST-03 (1.2 km); 0.5 km returns NO_ELIGIBLE_STATION
+check('AE-18 nearest eligible from ST-05 picks ST-03 (1.2 km) and respects radius 0.5 km', () => {
+  const store = createReservationStore(fixture)
+  const st05 = fixture.stations.find((s) => s.station_id === 'ST-05').coordinates
+
+  const nearest = createDraft(store, sessionA, {
+    family_code: 'FAM_A',
+    quantity: 1,
+    nearest: { lat: st05.lat, lng: st05.lng },
+  })
+  assert.equal(nearest.status, 201)
+  assert.equal(nearest.body.draft.station.station_id, 'ST-03')
+  assert.equal(nearest.body.draft.station.distance_display, '1.2 km')
+
+  const tooTight = createDraft(store, sessionA, {
+    family_code: 'FAM_A',
+    quantity: 1,
+    nearest: { lat: st05.lat, lng: st05.lng, radius_km: 0.5 },
+  })
+  assert.equal(tooTight.status, 409)
+  assert.equal(tooTight.body.error.code, 'NO_ELIGIBLE_STATION')
+})
+
+// AE-23f: Expired session cannot read or mutate
+check('AE-23f expired session returns 401 SESSION_EXPIRED on read and write', () => {
+  const store = createReservationStore(fixture)
+  assert.equal(listReservations(store, expiredSession).status, 401)
+  assert.equal(
+    createDraft(store, expiredSession, { station_id: 'ST-01', family_code: 'FAM_A', quantity: 1 }).body.error.code,
+    'SESSION_EXPIRED',
+  )
+})
 
 console.log(`\nAll ${passed} oracle checks passed.`)
