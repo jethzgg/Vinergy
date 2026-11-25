@@ -173,3 +173,26 @@ Bố cục 2 cột trên desktop (`>= 1024px`: danh sách bên trái `380px`, ch
 
 ---
 
+## 4. Ma trận xử lý lỗi tồn kho, bản nháp, idempotency & API
+
+Mỗi lỗi từ `api_contracts.md §2.2 & §6.2` có thông điệp người dùng rõ nguyên nhân và hành động khôi phục cụ thể (không hiển thị mã lỗi kỹ thuật thô thay cho giải thích, không tạo đơn trùng).
+
+| HTTP / Nguồn | `error.code` / `reason` | Thông điệp hiển thị cho người dùng | Hành động khôi phục trên UI | AE liên quan |
+| --- | --- | --- | --- | --- |
+| `400` | `INVALID_INPUT` (gồm `quantity ≠ 1`) | "Thông tin đặt pin chưa hợp lệ." + danh sách lỗi từng trường (`details`) | Giữ nguyên trường hợp lệ, đưa focus về trường lỗi | AE-08 |
+| `401` | `SESSION_REQUIRED` / `SESSION_EXPIRED` | "Phiên demo đã hết hạn hoặc chưa được chọn. Vui lòng chọn lại người dùng demo để tiếp tục." | Nút `Khôi phục phiên demo` (chọn `USER-A`/`USER-B`); không lộ dữ liệu đơn cũ | AE-23f |
+| `403` | `CSRF_INVALID` | "Mã bảo vệ phiên không hợp lệ. Vui lòng làm mới phiên và thử lại." | Nút `Làm mới phiên` (`GET /api/v1/demo-session`) | NFR-03 |
+| `404` | `DRAFT_NOT_FOUND` | "Không tìm thấy bản nháp đặt pin trong phiên hiện tại." | Nút `Tạo bản nháp mới` | AE-17 |
+| `404` | `RESERVATION_NOT_FOUND` | "Không tìm thấy đơn đặt pin trong phiên hiện tại." (không tiết lộ đơn thuộc người khác) | Nút `Quay về Đơn của tôi` | AE-14 |
+| `409` | `STATION_NOT_ELIGIBLE` · `OUT_OF_STOCK` | "Viên pin cuối cùng tại trạm này vừa được giữ trước khi bạn xác nhận. Chưa có đơn nào được tạo." | Nút `Tìm trạm gần nhất còn pin` (AE-18) / `Quay lại danh sách` | AE-10, AE-13 |
+| `409` | `STATION_NOT_ELIGIBLE` · `STATION_CLOSED` / `STATION_MAINTENANCE` / `CHARGING_ONLY` / `UNSUPPORTED_FAMILY` | Hiển thị đúng lý do từ `INELIGIBILITY_TEXT` (VD: *"Trạm đang đóng cửa"*, *"Chỉ có cổng sạc — không hỗ trợ đặt trước"*) | Nút `Tìm trạm gần nhất còn pin` | AE-02, AE-03, AE-10 |
+| `409` | `NO_ELIGIBLE_STATION` | "Không có trạm đổi pin nào đang mở, tương thích và còn pin trong phạm vi hiện tại. Không tạo bản nháp." | Nút `Mở rộng bán kính` hoặc `Chọn trạm thủ công` (không tự mở rộng ngầm) | AE-18 |
+| `409` | `DRAFT_STALE` (`DRAFT_EXPIRED` / `CONTENT_MISMATCH`) | "Bản nháp đã hết hiệu lực hoặc nội dung xác nhận không khớp với bản nháp. Vui lòng tạo bản nháp mới để kiểm tra lại tồn kho." | Nút `Tạo bản nháp mới` (sinh `draft_id` và `Idempotency-Key` mới) | AE-17 |
+| `409` | `DRAFT_ALREADY_USED` | "Bản nháp này đã được xác nhận tạo đơn trước đó." | Nút `Xem Đơn của tôi` + nút `Tạo bản nháp mới` (nếu muốn đặt đơn khác) | AE-17 |
+| `409` | `IDEMPOTENCY_KEY_REUSED` | "Khóa chống xử lý lặp đã được dùng cho một yêu cầu khác. Chưa có đơn mới nào được tạo." | Nút `Tạo bản nháp mới` (cấp khóa mới sạch) | AE-12 |
+| `409` | `REQUEST_IN_PROGRESS` | "Yêu cầu xác nhận cùng khóa đang được máy chủ xử lý. Vui lòng đối soát lại sau giây lát." | Nút `Đối soát bằng khóa cũ` (giữ nguyên `Idempotency-Key`, tôn trọng `Retry-After`) | AE-11 |
+| `500` / Mạng | `INTERNAL_ERROR` / Network timeout khi **xác nhận** | "**Chưa rõ kết quả xác nhận.** Yêu cầu có thể đã được máy chủ ghi nhận trước khi mất kết nối. Không tự tạo đơn mới." | (1) `Đối soát bằng khóa cũ` (gửi lại đúng `Idempotency-Key` cũ → nhận `200 Idempotent-Replayed` nếu đã thành công); (2) `Kiểm tra Đơn của tôi` | FR-12, AE-11, AE-21 |
+| `500` / Mạng | `INTERNAL_ERROR` / Network timeout khi **đọc/tạo nháp** | "Dịch vụ tạm thời gặp sự cố. Không có tồn kho nào bị thay đổi." | Nút `Thử lại` (không hiển thị như danh sách rỗng) | FR-12, NFR-02 |
+
+---
+
