@@ -500,3 +500,226 @@ export function getDraftDetail(store, session, draftId) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* POST /api/v1/reservations (§6.7)                                           */
+/* -------------------------------------------------------------------------- */
+
+const CONFIRM_FIELDS = new Set(['draft_id', 'station_id', 'family_code', 'quantity'])
+
+export function confirmReservation(store, session, body, idempotencyKey) {
+  const authErr = validateSession(session, store.nowMs)
+  if (authErr) return authErr
+
+  const details = []
+  if (typeof idempotencyKey !== 'string' || idempotencyKey.trim() === '') {
+    details.push({
+      field: 'Idempotency-Key',
+      reason: 'REQUIRED',
+      message: 'Thiếu header Idempotency-Key cho thao tác xác nhận.',
+    })
+  } else if (!IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+    details.push({
+      field: 'Idempotency-Key',
+      reason: 'INVALID_FORMAT',
+      message: 'Idempotency-Key phải dài 16–100 ký tự (chữ, số, -, _).',
+    })
+  }
+
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return errorResponse(400, 'INVALID_INPUT', 'Nội dung xác nhận không hợp lệ.', details)
+  }
+
+  if (body.draft_id === undefined) {
+    details.push({ field: 'draft_id', reason: 'REQUIRED', message: 'draft_id là bắt buộc.' })
+  } else if (typeof body.draft_id !== 'string' || !UUID_RE.test(body.draft_id)) {
+    details.push({
+      field: 'draft_id',
+      reason: 'INVALID_FORMAT',
+      message: 'draft_id phải là UUID chữ thường.',
+    })
+  }
+
+  if (body.station_id === undefined) {
+    details.push({ field: 'station_id', reason: 'REQUIRED', message: 'station_id là bắt buộc.' })
+  } else if (typeof body.station_id !== 'string' || !STATION_ID_RE.test(body.station_id)) {
+    details.push({
+      field: 'station_id',
+      reason: 'INVALID_FORMAT',
+      message: 'station_id không đúng định dạng.',
+    })
+  }
+
+  validateFamilyCode(body.family_code, details)
+  validateQuantity(body.quantity, details)
+  validateUnknownFields(body, CONFIRM_FIELDS, details)
+
+  if (details.length > 0) {
+    return errorResponse(400, 'INVALID_INPUT', 'Thông tin xác nhận đặt pin chưa hợp lệ.', details)
+  }
+
+  const idemScopeKey = `${session.demo_user}::CONFIRM_RESERVATION::${idempotencyKey}`
+  const requestHash = buildRequestHash(body)
+
+  // §6.7 Step 1–2 (BR-08): Check idempotency FIRST before draft expiry or current station conditions.
+  const existingIdem = store.idempotency.get(idemScopeKey)
+  if (existingIdem) {
+    if (existingIdem.request_hash !== requestHash) {
+      return errorResponse(
+        409,
+        'IDEMPOTENCY_KEY_REUSED',
+        'Khóa chống xử lý lặp đã được sử dụng cho một nội dung xác nhận khác.',
+      )
+    }
+    if (existingIdem.in_progress) {
+      return errorResponse(
+        409,
+        'REQUEST_IN_PROGRESS',
+        'Yêu cầu xác nhận cùng khóa đang được máy chủ xử lý. Vui lòng đối soát lại sau giây lát.',
+        [],
+        { 'Retry-After': '1' },
+      )
+    }
+    const existingOrder = store.reservations.get(existingIdem.reservation_id)
+    if (existingOrder) {
+      reconcileReservationExpiry(store, existingOrder)
+      return {
+        status: 200,
+        ok: true,
+        headers: { 'Idempotent-Replayed': 'true', 'Cache-Control': 'no-store' },
+        body: {
+          is_simulated: true,
+          reservation: projectReservation(existingOrder),
+          request_id: makeRequestId(),
+        },
+      }
+    }
+  }
+
+  // §6.7 Step 3: Draft exists and belongs to current session user.
+  const draft = store.drafts.get(body.draft_id)
+  if (!draft || draft.owner_id !== session.demo_user) {
+    return errorResponse(404, 'DRAFT_NOT_FOUND', 'Không tìm thấy bản nháp trong phiên hiện tại.')
+  }
+
+  // §6.7 Step 4: Used draft with a NEW idempotency key returns conflict (AE-17).
+  if (draft.reservation_id) {
+    return errorResponse(
+      409,
+      'DRAFT_ALREADY_USED',
+      'Bản nháp này đã được sử dụng để tạo đơn đặt pin trước đó.',
+    )
+  }
+
+  // §6.7 Step 5: Body mismatches draft station_id / family_code / quantity -> DRAFT_STALE (CONTENT_MISMATCH).
+  if (
+    body.station_id !== draft.station_id ||
+    body.family_code !== draft.family_code ||
+    body.quantity !== draft.quantity
+  ) {
+    return errorResponse(
+      409,
+      'DRAFT_STALE',
+      'Nội dung xác nhận không khớp với bản nháp ban đầu. Vui lòng tạo bản nháp mới.',
+      [
+        {
+          field: 'draft_id',
+          reason: 'CONTENT_MISMATCH',
+          message: 'station_id, family_code hoặc quantity không khớp với bản nháp.',
+        },
+      ],
+    )
+  }
+
+  // §6.7 Step 6: Draft expired -> DRAFT_STALE (DRAFT_EXPIRED).
+  if (store.nowMs >= Date.parse(draft.expires_at)) {
+    return errorResponse(
+      409,
+      'DRAFT_STALE',
+      'Bản nháp đã hết hiệu lực. Vui lòng tạo bản nháp mới để kiểm tra lại tồn kho.',
+      [
+        {
+          field: 'draft_id',
+          reason: 'DRAFT_EXPIRED',
+          message: 'Bản nháp đã quá thời hạn xác nhận.',
+        },
+      ],
+    )
+  }
+
+  // §6.7 Step 7 (BR-07): Atomic re-check of station status, service, family and stock >= 1.
+  const station = store.stations.find((s) => s.station_id === draft.station_id)
+  if (!station) {
+    return errorResponse(404, 'STATION_NOT_FOUND', 'Không tìm thấy trạm.')
+  }
+  const verdict = evaluateBooking(station, draft.family_code)
+  if (!verdict.booking_eligible) {
+    return errorResponse(
+      409,
+      'STATION_NOT_ELIGIBLE',
+      verdict.ineligibility_reason === 'OUT_OF_STOCK'
+        ? `Trạm đã hết pin ${draft.family_code} khả dụng.`
+        : INELIGIBILITY_TEXT[verdict.ineligibility_reason],
+      [
+        {
+          field: 'station_id',
+          reason: verdict.ineligibility_reason,
+          message:
+            verdict.ineligibility_reason === 'OUT_OF_STOCK'
+              ? `Trạm đã hết pin ${draft.family_code} khả dụng.`
+              : INELIGIBILITY_TEXT[verdict.ineligibility_reason],
+        },
+      ],
+    )
+  }
+
+  // §6.7 Step 8: Atomic commit — decrement stock by 1, mark draft USED, create ACTIVE order.
+  station.available_batteries_by_family[draft.family_code] -= 1
+  const createdAt = getNowIso(store)
+  const expiresAt = new Date(store.nowMs + draft.hold_minutes * 60 * 1000).toISOString()
+
+  const record = {
+    reservation_id: makeUuid(),
+    owner_id: session.demo_user,
+    status: 'ACTIVE',
+    draft_id: draft.draft_id,
+    station: {
+      station_id: station.station_id,
+      name: station.name,
+      area_label: station.area_label,
+      coordinates: { ...station.coordinates },
+    },
+    family_code: draft.family_code,
+    quantity: 1,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    cancelled_at: null,
+    expired_at: null,
+  }
+
+  draft.reservation_id = record.reservation_id
+  store.reservations.set(record.reservation_id, record)
+  store.idempotency.set(idemScopeKey, {
+    user_id: session.demo_user,
+    operation: 'CONFIRM_RESERVATION',
+    idempotency_key: idempotencyKey,
+    request_hash: requestHash,
+    reservation_id: record.reservation_id,
+    in_progress: false,
+    created_at: createdAt,
+  })
+
+  return {
+    status: 201,
+    ok: true,
+    headers: {
+      Location: `/api/v1/reservations/${record.reservation_id}`,
+      'Cache-Control': 'no-store',
+    },
+    body: {
+      is_simulated: true,
+      reservation: projectReservation(record),
+      request_id: makeRequestId(),
+    },
+  }
+}
+
+/* -------------------------------------------------------------------------- */
