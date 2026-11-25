@@ -12,14 +12,14 @@ backend\.venv\Scripts\python db/check_reservation_tx.py
 - Cần `TEST_DATABASE_URL` (biến môi trường hoặc `.env`) trỏ tới CSDL có tên kết thúc bằng `_test`. Script từ chối mọi tên khác.
 - Mỗi kịch bản chạy `db/reset.sql` + `db/seed.sql` trước, và đặt lại một lần cuối.
 - Thời gian là tham số `now` (D-06), bắt đầu từ `T0 = 2026-11-25T08:00:00Z`, với hạn nháp 5 phút và giữ pin 15 phút (đề xuất của M1 ở SRS §8).
-- Điều kiện đặt pin lúc tạo nháp dùng đúng hàm `booking_eligibility` của Station Service trong `backend/app/stations/domain.py` (D-03).
+- Điều kiện đặt pin lúc tạo nháp và lúc xác nhận dùng đúng hàm `booking_eligibility` của Station Service trong `backend/app/stations/domain.py` (D-03).
 - Tình huống đồng thời: mỗi yêu cầu chạy trên một kết nối riêng, xuất phát cùng lúc bằng `threading.Barrier`. Một bên giữ khóa thêm 0,2–0,3 giây để tranh chấp chắc chắn xảy ra.
 
 ## Kết quả
 
 | Môi trường | Ngày | Kết quả |
 | --- | --- | --- |
-| Windows 11, Python 3.10.11, psycopg 3.3.9, PostgreSQL 18, CSDL `vinergy_test`, `main` tại `840319d` + nhánh `feat/2.1.3-reservation-design` | 2026-11-25 | **70/70 PASS** — "ĐẠT: mọi kiểm tra đều qua" |
+| macOS arm64, Python 3.14.0, psycopg 3.3.9, PostgreSQL 16.16, CSDL biệt lập `vinergy_test` sau migration 002 | 2026-11-25 | **72/72 PASS** |
 
 | Nhóm | Số kiểm tra | Nội dung đã kiểm chứng |
 | --- | ---: | --- |
@@ -37,11 +37,12 @@ backend\.venv\Scripts\python db/check_reservation_tx.py
 | AE-09a, AE-10b | 5 | Nháp tạo T0 hết hạn đúng T0 + 5 phút; xác nhận T0 + 4 phút → giữ đến T0 + 19 phút; lúc T0 + 5 phút nháp hết hạn nhưng đơn vẫn `ACTIVE`, kho 5; chủ đơn đọc đúng T0 + 19 phút → `EXPIRED`, kho 6; người khác đọc → `RESERVATION_NOT_FOUND` |
 | AE-10b (đổi cấu hình) | 2 | Giữ pin cấu hình 20 phút: xác nhận T0 + 4 phút → hạn T0 + 24 phút (dịch đúng 5 phút so với cấu hình 15); lúc T0 + 19 đơn vẫn `ACTIVE`, kho 5 |
 | AE-10a (lúc tạo nháp) | 5 | ST-02 `CHARGING_ONLY`, ST-04 `UNSUPPORTED_FAMILY`, ST-09 `STATION_CLOSED`, ST-13 `STATION_MAINTENANCE`, ST-05 `OUT_OF_STOCK`; không tạo nháp, tồn kho không đổi |
-| AE-10a (lúc xác nhận) | 5 | Tạo nháp ở ST-01 rồi đổi sang đóng cửa / bảo trì + kho 0 / hết pin A → đúng lý do, số đơn và tồn kho thay đổi 0. Bỏ dịch vụ đổi pin hoặc bỏ hỗ trợ FAM_A khi còn nháp → DB từ chối (`fk_draft_battery_stock`), kho giữ 6 |
+| AE-10a (lúc xác nhận) | 5 | ST-01 trả đúng lý do khi đóng cửa, bảo trì hoặc hết pin. ST-02 và ST-04 tạm bổ sung một pin A để tạo nháp, sau đó bỏ dòng tồn kho vừa thêm. Xác nhận trả lần lượt `409 STATION_NOT_ELIGIBLE` với `CHARGING_ONLY` và `UNSUPPORTED_FAMILY`. Cả năm ca đều giữ nguyên số đơn và tồn kho so với ngay trước xác nhận. |
+| Bảo vệ dòng tồn kho | 2 | Khi còn đơn ACTIVE, DB chặn xóa dòng tồn kho. Sau khi hủy, số pin trở về 6 và có thể xóa dòng kho của nhóm vừa ngừng hỗ trợ. |
 | AE-11a | 2 | Hai nháp, hai khóa của USER-A → hai đơn `ACTIVE` khác mã, kho 6 → 4; gửi lại xác nhận thứ hai trả đúng đơn thứ hai, kho vẫn 4 |
 | Đặt lại | 1 | `validate_seed.sql` đạt 38/38 sau khi chạy xong |
 
-Sau khi script chạy, bộ test backend vẫn đạt **258 passed**, và `python db/check_seed.py` vẫn "ĐẠT" (cùng ngày, cùng commit).
+Chạy độc lập `python db/check_seed.py` trên SQLite đạt các bước kiểm tra fixture, kiểm tra 38 điều kiện seed và ba vòng reset. Khi áp dụng migration 002 lên bản sao đã có đơn ACTIVE, PostgreSQL và SQLite đều giữ dữ liệu lịch sử. Trên PostgreSQL, một giao dịch xóa dòng kho bắt đầu khi xác nhận chưa commit đã chờ rồi bị từ chối. Hủy đơn sau đó hoàn pin về 6. Các kiểm tra nâng cấp và tranh chấp xóa này được chạy riêng ngoài 72 kiểm tra trong script.
 
 ## Lịch sử
 
@@ -50,6 +51,7 @@ Sau khi script chạy, bộ test backend vẫn đạt **258 passed**, và `pytho
 | 2026-11-23 | 51/51 | Bản đầu, giá trị tạm 10 phút / 30 phút |
 | 2026-11-24 | 68/68 | Theo 2.1.1: 5 phút / 15 phút; thêm AE-09a, AE-10a (10 ca), AE-10b, AE-11a; tạo nháp kiểm tra `booking_eligibility`; `lock_timeout` chỉ áp dụng cho advisory lock; worker dùng `pg_try_advisory_xact_lock`. Ca AE-11 "gửi lại khi nháp hết hạn" dời từ T0 + 20 sang T0 + 10 phút, vì với giữ 15 phút thì lúc T0 + 20 chính đơn cũng đã hết hạn. |
 | 2026-11-25 | 70/70 | Theo góp ý review: thêm 2 kiểm tra cho câu cuối AE-10b (đổi thời lượng giữ trong cấu hình thì hạn đơn mới dịch theo). Sửa định dạng 10 sơ đồ Mermaid trong [Reservation_Design.md](./Reservation_Design.md). |
+| 2026-11-25 | 72/72 | Áp dụng migration 002, kiểm tra hai thay đổi cấu hình sau khi tạo nháp và vòng đời bảo vệ dòng tồn kho. |
 
 ## Giới hạn
 
