@@ -1,6 +1,6 @@
-# Vinergy — Hợp đồng API & LLM Tool (v2.0 — Sprint 1 + đặt pin Sprint 2)
+# Vinergy — Hợp đồng API & LLM Tool (v2.2 — Sprint 1 + đặt pin Sprint 2)
 
-> **Trạng thái:** §1–§5 v1.0 rev 2 (Task 1.1.2, M2). §6 Draft v2.0 (Task 2.1.3, M4 — Bui Quang Minh), chờ rà soát cùng M1, M2, M6 | **Phụ trách:** M2 (Vu Duy Quang) và M4  
+> **Trạng thái:** §1–§5 v1.0 rev 2 (Task 1.1.2, M2). §6 Draft v2.2 (Task 2.1.3, M4 — Bui Quang Minh), chờ rà soát cùng M1, M2, M3, M6 | **Phụ trách:** M2 (Vu Duy Quang) và M4  
 > **Tham chiếu:** [architecture.md](./architecture.md), [tool_schemas.json](./tool_schemas.json), [SRS.md](../requirements/SRS.md), [Acceptance_Examples_and_Sample_Data.md](../requirements/Acceptance_Examples_and_Sample_Data.md), [seed_stations_v0.json](../../data/seed_stations_v0.json)  
 > **Phạm vi:** Hợp đồng Sprint 1 (§1–§5) và hợp đồng đặt pin Sprint 2 (§6, thiết kế ở [Reservation_Design.md](../design/Reservation_Design.md)). Thêm endpoint là thay đổi tương thích nên vẫn dùng base path `/api/v1`. Mọi ví dụ trong tài liệu được tính từ dữ liệu seed và khớp với giá trị đối chiếu của AE.
 
@@ -597,7 +597,7 @@ Response `200 OK` (minh họa `LOC-01`, `SWAPPING`, `FAM_A`, `radius_km: 1`):
 
 ## 6. Đặt pin (Sprint 2)
 
-> Chốt ở 2.1.3 (draft v2.1, chờ rà soát), đã đối chiếu 2.1.1. Thiết kế trạng thái, giao dịch và lý do: [Reservation_Design.md](../design/Reservation_Design.md). Các giá trị thời gian là cấu hình; ví dụ dùng đề xuất demo của M1 ở SRS §8: `DRAFT_TTL_MINUTES = 5` (tính từ lúc tạo nháp), `RESERVATION_HOLD_MINUTES = 15` (tính từ lúc xác nhận thành công). Một mốc hết hạn có hiệu lực đến ngay trước thời điểm đó (`now >= expires_at` là đã hết hạn).
+> Chốt ở 2.1.3 (draft v2.2, chờ rà soát), đã đối chiếu 2.1.1. Client dựng theo bản tạm rev 2 xem §6.12. Thiết kế trạng thái, giao dịch và lý do: [Reservation_Design.md](../design/Reservation_Design.md). Các giá trị thời gian là cấu hình; ví dụ dùng đề xuất demo của M1 ở SRS §8: `DRAFT_TTL_MINUTES = 5` (tính từ lúc tạo nháp), `RESERVATION_HOLD_MINUTES = 15` (tính từ lúc xác nhận thành công). Một mốc hết hạn có hiệu lực đến ngay trước thời điểm đó (`now >= expires_at` là đã hết hạn).
 
 Mọi endpoint ở mục này:
 
@@ -824,7 +824,27 @@ Bổ sung vào bảng §2.2. Mỗi mã gắn một HTTP status.
 | `409` | `NO_ELIGIBLE_STATION` | `nearest` không có trạm đủ điều kiện trong phạm vi | AE-18 |
 | `409` | `ACTIVE_RESERVATION_LIMIT` | **Dự phòng.** Đề xuất 2.1.1 cho phép nhiều đơn `ACTIVE` (AE-11a), nên mã này không dùng trừ khi nhóm đổi chính sách | — |
 
-Thay đổi so với bản tạm rev 2: bỏ `draft_revision` (bản nháp bất biến, mỗi `draft_id` là một phiên bản); body xác nhận lặp lại `station_id`, `family_code`; thêm `GET /reservation-drafts/{draft_id}`; `DRAFT_STALE` có `reason` để phân biệt hết hạn và lệch nội dung.
+### 6.12. Thay đổi phía client so với bản tạm rev 2
+
+Bản tạm rev 2 chỉ giữ chỗ tên endpoint và mã lỗi, chưa định nghĩa phản hồi. Prototype 2.1.2 (`prototypes/reservation-flow/`) dựng theo bản đó, nên khi nối API thật phải đổi các điểm dưới đây. Hai dòng đầu làm sai kết quả xác nhận hoặc thông tin người dùng thấy trước khi đặt, nên cần sửa trước.
+
+| # | Chỗ | Bản tạm rev 2 / prototype | Hợp đồng v2.1 |
+| --- | --- | --- | --- |
+| 1 | Body `POST /reservations` | `{ draft_id, draft_revision, quantity }` | `{ draft_id, station_id, family_code, quantity }`, lấy từ `draft.station.station_id` và `draft.family_code` của bản nháp người dùng đang xem. Gửi `draft_revision` nhận `400 UNKNOWN_FIELD`; thiếu `station_id`/`family_code` nhận `400 REQUIRED`. |
+| 2 | Gửi lại sau khi mất phản hồi | Dựng lại body từ trạng thái màn hình | Gửi **đúng body đã gửi lần đầu** cùng `Idempotency-Key`. Client lưu body cùng với khóa. Server so `request_hash` trên cả 4 trường (thứ tự khóa JSON không quan trọng); lệch bất kỳ trường nào nhận `409 IDEMPOTENCY_KEY_REUSED` thay vì đơn gốc. |
+| 3 | Thời gian giữ hiển thị trước khi xác nhận (FR-06) | `hold_ttl_seconds` ở ngoài `draft`; thiếu thì hiện 15 phút | `draft.hold_minutes` (đơn vị phút, nằm trong `draft`). Không có giá trị mặc định phía client. Kiểm tra với cấu hình khác 15 phút để chắc màn hình đọc từ server. |
+| 4 | Thông tin trạm | `station_id`, `station_name`, `area_label`, `coordinates` phẳng trong `draft`/`reservation` | Lồng trong `draft.station` (§6.3) và `reservation.station` (§6.6). Tên trạm là `station.name`. |
+| 5 | Tồn kho hiển thị | `draft.available_batteries_snapshot` | `draft.available_batteries`, tính lại mỗi lần đọc, không được giữ |
+| 6 | Trường không có trong hợp đồng | `draft_revision`, `user_id`, `opening_status`, `used_by_reservation_id` trong `draft`; `user_id` trong `reservation` | Dùng `draft.status` và `draft.reservation_id`. Chủ đơn luôn là người dùng của phiên hiện tại, nên không trả `user_id`. |
+| 7 | Body `POST /reservation-drafts` | Kèm `origin` khi chọn trạm bằng `station_id` | Không có `origin`; gửi lên nhận `400 UNKNOWN_FIELD`. Khoảng cách chỉ có khi dùng `nearest`; với `station_id`, `distance_km` là `null`. |
+| 8 | Phản hồi hủy | Có thêm `released_stock`, `reconciled_from_expiry` | Chỉ có `reservation`. Kết quả đọc từ `reservation.status`: `CANCELLED` là đã hủy và hoàn pin, `EXPIRED` là đơn đã hết hạn trước khi hủy (§6.10). |
+| 9 | `409 REQUEST_IN_PROGRESS` | `retry_after_seconds` trong body | Header `Retry-After` (giây) |
+| 10 | `409 DRAFT_STALE` | Không phân biệt nguyên nhân | `details[0].reason` là `DRAFT_EXPIRED` hoặc `CONTENT_MISMATCH` |
+| 11 | Mã định danh | `drf_…`, `res_…` | UUID chữ thường (§6.1). Ô tra cứu đơn nhập sai định dạng nhận `400 INVALID_FORMAT`, không phải `404`. |
+| 12 | `reason` khi validate | `INVALID_FORMAT`, `OUT_OF_RANGE` | `station_id`/`nearest`: `ONE_OF_REQUIRED`, `MUTUALLY_EXCLUSIVE`. `quantity`: `NOT_A_NUMBER`, `MUST_BE_ONE` (§6.2) |
+| 13 | Đồng hồ server cho đếm ngược | `server_time` trong body | **Chưa có trong hợp đồng.** M3 và M4 cần chốt trước 2.2: thêm `server_time` vào mọi phản hồi §6, hoặc client đọc header `Date`. |
+
+Các thay đổi khác so với rev 2: bản nháp bất biến nên không còn `draft_revision` (mỗi `draft_id` là một phiên bản); thêm `GET /reservation-drafts/{draft_id}`.
 
 ---
 
@@ -860,3 +880,4 @@ Thay đổi so với bản tạm rev 2: bỏ `draft_revision` (bản nháp bất
 | rev 2 | 2026-11-13 | Sửa ví dụ search theo AE-01. Mỗi mã lỗi gắn một HTTP status, bổ sung thứ tự middleware và quy tắc body JSON. Thêm quy tắc parse query và mã `reason`. Thêm hợp đồng phiên demo và CSRF. Định nghĩa đối tượng `Station` và thuật toán eligibility có thứ tự, kèm bảng đối chiếu. Thêm `family_code`, `lat`, `lng` cho endpoint chi tiết. Đồng bộ `tool_schemas.json` v1.0 (bỏ `lat`/`lng`, thêm `result_schemas`), ngữ cảnh chèn, kết quả/lỗi tool, giới hạn orchestrator và `/chat` tạm thời khớp schema. Giữ chỗ mã lỗi Sprint 2. |
 | v2.0 draft | 2026-11-23 | (2.1.3, M4) Thay §6 tạm thời bằng hợp đồng đặt pin đầy đủ: đối tượng `draft`/`reservation`, 6 endpoint, quy tắc validate `quantity`/`Idempotency-Key`/`nearest`, thứ tự xử lý xác nhận và gửi lại, bảng hủy theo thời điểm, mã lỗi §6.11. Bỏ `draft_revision` (bản nháp bất biến), body xác nhận lặp lại `station_id`/`family_code`, thêm `GET /reservation-drafts/{draft_id}`, thêm `reason` mới vào §2.3. |
 | v2.1 draft | 2026-11-24 | (2.1.3, M4) Đối chiếu 2.1.1: ví dụ dùng hạn nháp 5 phút và giữ pin 15 phút (AE-09a, AE-10b); `ACTIVE_RESERVATION_LIMIT` ghi rõ không dùng theo đề xuất cho phép nhiều đơn (AE-11a); bổ sung truy vết AE-09a/10a/10b/11a. §3.4: thống nhất với §1.3 — `user_id`/`owner` trong body/query bị từ chối là trường lạ, không còn ghi "bị bỏ qua". |
+| v2.2 draft | 2026-11-25 | (2.1.3, M4) Theo góp ý review: thêm §6.12, liệt kê từng thay đổi client 2.1.2 cần làm so với bản tạm rev 2 (body xác nhận, gửi lại, `draft.hold_minutes`, cấu trúc lồng `station`, phản hồi hủy). Ghi nhận `server_time` là điểm chưa chốt. |

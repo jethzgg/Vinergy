@@ -1,6 +1,6 @@
 # Vinergy — Thiết kế đặt pin: trạng thái, dữ liệu và giao dịch (WBS 2.1.3)
 
-> **Trạng thái:** Draft v2.1 (Sprint 2, Task 2.1.3), đã đối chiếu 2.1.1 (`840319d`), chờ rà soát | **Phụ trách:** M4 (Bui Quang Minh), rà soát cùng M1, M2, M6, M7
+> **Trạng thái:** Draft v2.2 (Sprint 2, Task 2.1.3), đã đối chiếu 2.1.1 (`840319d`) và góp ý review 25/11, chờ rà soát | **Phụ trách:** M4 (Bui Quang Minh), rà soát cùng M1, M2, M3, M6, M7
 > **Tham chiếu:** [SRS.md](../requirements/SRS.md) v0.4 BR-05…BR-10, FR-06…FR-09, §8; [Acceptance_Examples_and_Sample_Data.md](../requirements/Acceptance_Examples_and_Sample_Data.md) v0.4 AE-08…AE-18 (gồm AE-09a, AE-10a, AE-10b, AE-11a của 2.1.1); [architecture.md](../architecture/architecture.md) AD-04, AD-07, AD-09; [api_contracts.md](../architecture/api_contracts.md) §3, §6; [Database_Design.md](./Database_Design.md)
 > **Phạm vi:** Thiết kế mà 2.2 (M2/M5/M6) dùng để triển khai form đặt pin, xem, hủy và hết hạn đơn. Hợp đồng HTTP chi tiết nằm ở [api_contracts.md §6](../architecture/api_contracts.md#6-đặt-pin-sprint-2). Tài liệu này giải thích **vì sao** và **giao dịch chạy thế nào**.
 
@@ -43,7 +43,14 @@ Các giá trị đánh dấu **(đề xuất M1, SRS §8)** lấy từ 2.1.1 (24
 ### 3.1 Phiên demo
 
 ```mermaid
-stateDiagram-v2<br/>    [*] --> ACTIVE: POST /demo-session\n(tạo raw_sid, lưu HMAC)<br/>    ACTIVE --> ACTIVE: request hợp lệ\n(không gia hạn)<br/>    ACTIVE --> REVOKED: DELETE /demo-session\nhoặc POST /demo-session lần nữa<br/>    ACTIVE --> EXPIRED: now >= expires_at<br/>    REVOKED --> [*]<br/>    EXPIRED --> [*]<br/>```
+stateDiagram-v2
+    [*] --> ACTIVE: POST /demo-session<br/>(tạo raw_sid, lưu HMAC)
+    ACTIVE --> ACTIVE: request hợp lệ<br/>(không gia hạn)
+    ACTIVE --> REVOKED: DELETE /demo-session<br/>hoặc POST /demo-session lần nữa
+    ACTIVE --> EXPIRED: now >= expires_at
+    REVOKED --> [*]
+    EXPIRED --> [*]
+```
 
 | Trạng thái | Cách nhận biết trong `user_session` | Request kèm cookie này nhận |
 | --- | --- | --- |
@@ -57,7 +64,17 @@ Trạng thái được suy ra, không lưu cột `status`. Đơn và bản nháp
 ### 3.2 Bản nháp
 
 ```mermaid
-stateDiagram-v2<br/>    [*] --> OPEN: POST /reservation-drafts\n(trạm đủ điều kiện, KHÔNG trừ pin)<br/>    OPEN --> USED: xác nhận thành công\n(đơn mới trỏ tới draft_id)<br/>    OPEN --> EXPIRED: now >= draft.expires_at<br/>    USED --> [*]<br/>    EXPIRED --> [*]<br/>    note right of USED<br/>        Bất biến: không bao giờ tạo đơn thứ hai,<br/>        kể cả khi đơn đã CANCELLED/EXPIRED (AE-17).<br/>    end note<br/>```
+stateDiagram-v2
+    [*] --> OPEN: POST /reservation-drafts<br/>(trạm đủ điều kiện, KHÔNG trừ pin)
+    OPEN --> USED: xác nhận thành công<br/>(đơn mới trỏ tới draft_id)
+    OPEN --> EXPIRED: now >= draft.expires_at
+    USED --> [*]
+    EXPIRED --> [*]
+    note right of USED
+        Bất biến: không bao giờ tạo đơn thứ hai,
+        kể cả khi đơn đã CANCELLED/EXPIRED (AE-17).
+    end note
+```
 
 | Trạng thái | Suy ra từ | Xác nhận với khóa **mới** nhận |
 | --- | --- | --- |
@@ -70,7 +87,13 @@ stateDiagram-v2<br/>    [*] --> OPEN: POST /reservation-drafts\n(trạm đủ đ
 ### 3.3 Đơn đặt pin
 
 ```mermaid
-stateDiagram-v2<br/>    [*] --> ACTIVE: xác nhận thành công\n(tồn kho -1, expires_at = now + hold)<br/>    ACTIVE --> CANCELLED: hủy với now < expires_at\n(tồn kho +1)<br/>    ACTIVE --> EXPIRED: đối soát khi đọc/gửi lại/hủy\nhoặc worker, với now >= expires_at\n(tồn kho +1)<br/>    CANCELLED --> [*]<br/>    EXPIRED --> [*]<br/>```
+stateDiagram-v2
+    [*] --> ACTIVE: xác nhận thành công<br/>(tồn kho -1, expires_at = now + hold)
+    ACTIVE --> CANCELLED: hủy với now < expires_at<br/>(tồn kho +1)
+    ACTIVE --> EXPIRED: đối soát khi đọc/gửi lại/hủy<br/>hoặc worker, với now >= expires_at<br/>(tồn kho +1)
+    CANCELLED --> [*]
+    EXPIRED --> [*]
+```
 
 | Chuyển | Điều kiện nguyên tử | Hiệu ứng | Ràng buộc DB bảo vệ |
 | --- | --- | --- | --- |
@@ -84,7 +107,13 @@ Hai điều kiện thời gian **loại trừ nhau** theo cùng `:now`, nên m�
 ### 3.4 Khóa idempotency
 
 ```mermaid
-stateDiagram-v2<br/>    [*] --> UNUSED<br/>    UNUSED --> HELD: request đầu tiên lấy advisory lock<br/>    HELD --> UNUSED: request bị từ chối (400/404/409)\nkhông ghi bản ghi, được thử lại<br/>    HELD --> BOUND: tạo đơn thành công\n(INSERT idempotency_record cùng giao dịch)<br/>    BOUND --> BOUND: cùng request_hash → trả đơn gốc (200)\nkhác request_hash → 409 IDEMPOTENCY_KEY_REUSED<br/>```
+stateDiagram-v2
+    [*] --> UNUSED
+    UNUSED --> HELD: request đầu tiên lấy advisory lock
+    HELD --> UNUSED: request bị từ chối (400/404/409)<br/>không ghi bản ghi, được thử lại
+    HELD --> BOUND: tạo đơn thành công<br/>(INSERT idempotency_record cùng giao dịch)
+    BOUND --> BOUND: cùng request_hash → trả đơn gốc (200)<br/>khác request_hash → 409 IDEMPOTENCY_KEY_REUSED
+```
 
 `HELD` chỉ tồn tại trong bộ nhớ của PostgreSQL trong thời gian giao dịch chạy (advisory lock tự nhả khi commit/rollback). Request cùng khóa đến lúc đó **chờ**, rồi thấy `BOUND` và trả đơn gốc (AE-11, trường hợp đồng thời).
 
@@ -160,7 +189,57 @@ Hai ghi chú cho bản thiết kế DB: bảng `user_session` không còn là "t
 Bản vẽ draw.io gốc ở [Database_Design.md §2](./Database_Design.md#2-mô-hình-er-mức-khái-niệm). Sơ đồ dưới đây ở mức bảng, nằm trong repo để rà soát cùng PR.
 
 ```mermaid
-erDiagram<br/>    BATTERY_FAMILY ||--o{ STATION_BATTERY_STOCK : "đổi pin"<br/>    STATION ||--o{ STATION_BATTERY_STOCK : "có"<br/>    BATTERY_FAMILY ||--o{ STATION_CHARGING_PORT : "sạc"<br/>    STATION ||--o{ STATION_CHARGING_PORT : "có"<br/>    APP_USER ||--o{ USER_SESSION : "đăng nhập"<br/>    APP_USER ||--o{ RESERVATION_DRAFT : "chuẩn bị"<br/>    STATION_BATTERY_STOCK ||--o{ RESERVATION_DRAFT : "nhắm tới"<br/>    RESERVATION_DRAFT ||--o| RESERVATION : "xác nhận thành"<br/>    APP_USER ||--o{ IDEMPOTENCY_RECORD : "sở hữu khóa"<br/>    RESERVATION ||--|| IDEMPOTENCY_RECORD : "kết quả của"<br/><br/>    STATION {<br/>        varchar station_id PK<br/>        varchar opening_status "OPEN | CLOSED | MAINTENANCE"<br/>    }<br/>    STATION_BATTERY_STOCK {<br/>        varchar station_id PK, FK<br/>        varchar family_code PK, FK<br/>        int available_batteries "CHECK >= 0"<br/>    }<br/>    USER_SESSION {<br/>        char session_token_hash PK "HMAC-SHA256 hex"<br/>        varchar user_id FK<br/>        timestamptz expires_at<br/>        timestamptz revoked_at "NULL = chưa thu hồi"<br/>    }<br/>    RESERVATION_DRAFT {<br/>        uuid draft_id PK<br/>        varchar user_id FK<br/>        varchar station_id FK<br/>        varchar family_code FK<br/>        int quantity "CHECK = 1"<br/>        timestamptz expires_at<br/>    }<br/>    RESERVATION {<br/>        uuid reservation_id PK<br/>        uuid draft_id FK "UNIQUE"<br/>        varchar status "ACTIVE | CANCELLED | EXPIRED"<br/>        timestamptz expires_at<br/>        timestamptz cancelled_at<br/>        timestamptz expired_at<br/>    }<br/>    IDEMPOTENCY_RECORD {<br/>        varchar user_id PK, FK<br/>        varchar operation PK "CONFIRM_RESERVATION"<br/>        varchar idempotency_key PK<br/>        char request_hash "SHA-256 hex"<br/>        uuid reservation_id FK "UNIQUE theo operation"<br/>    }<br/>```
+erDiagram
+    BATTERY_FAMILY ||--o{ STATION_BATTERY_STOCK : "đổi pin"
+    STATION ||--o{ STATION_BATTERY_STOCK : "có"
+    BATTERY_FAMILY ||--o{ STATION_CHARGING_PORT : "sạc"
+    STATION ||--o{ STATION_CHARGING_PORT : "có"
+    APP_USER ||--o{ USER_SESSION : "đăng nhập"
+    APP_USER ||--o{ RESERVATION_DRAFT : "chuẩn bị"
+    STATION_BATTERY_STOCK ||--o{ RESERVATION_DRAFT : "nhắm tới"
+    RESERVATION_DRAFT ||--o| RESERVATION : "xác nhận thành"
+    APP_USER ||--o{ IDEMPOTENCY_RECORD : "sở hữu khóa"
+    RESERVATION ||--|| IDEMPOTENCY_RECORD : "kết quả của"
+
+    STATION {
+        varchar station_id PK
+        varchar opening_status "OPEN | CLOSED | MAINTENANCE"
+    }
+    STATION_BATTERY_STOCK {
+        varchar station_id PK, FK
+        varchar family_code PK, FK
+        int available_batteries "CHECK >= 0"
+    }
+    USER_SESSION {
+        char session_token_hash PK "HMAC-SHA256 hex"
+        varchar user_id FK
+        timestamptz expires_at
+        timestamptz revoked_at "NULL = chưa thu hồi"
+    }
+    RESERVATION_DRAFT {
+        uuid draft_id PK
+        varchar user_id FK
+        varchar station_id FK
+        varchar family_code FK
+        int quantity "CHECK = 1"
+        timestamptz expires_at
+    }
+    RESERVATION {
+        uuid reservation_id PK
+        uuid draft_id FK "UNIQUE"
+        varchar status "ACTIVE | CANCELLED | EXPIRED"
+        timestamptz expires_at
+        timestamptz cancelled_at
+        timestamptz expired_at
+    }
+    IDEMPOTENCY_RECORD {
+        varchar user_id PK, FK
+        varchar operation PK "CONFIRM_RESERVATION"
+        varchar idempotency_key PK
+        char request_hash "SHA-256 hex"
+        uuid reservation_id FK "UNIQUE theo operation"
+    }
+```
 
 ---
 
@@ -227,7 +306,7 @@ Mọi nhánh lỗi là `ROLLBACK`, nên request bị từ chối không đổi t
 
 **Không cần kiểm tra `SWAPPING`/nhóm pin lúc xác nhận:** khóa ngoại `fk_draft_battery_stock` bảo đảm dòng tồn kho tồn tại suốt đời bản nháp; muốn bỏ hỗ trợ một nhóm thì phải xóa bản nháp trước (chỉ xảy ra khi reset).
 
-**AE-10a ở bước xác nhận.** Ba dòng `STATION_CLOSED`, `STATION_MAINTENANCE`, `OUT_OF_STOCK` kiểm tra được đúng như AE-10a mô tả: tạo nháp khi trạm đủ điều kiện, đổi trạng thái/tồn kho, rồi xác nhận (bước 4–5). Hai dòng `CHARGING_ONLY` và `UNSUPPORTED_FAMILY` thì **không dựng được** theo cách đó: lệnh bỏ dịch vụ đổi pin hoặc bỏ hỗ trợ FAM_A của một trạm đang có bản nháp bị DB từ chối (`ForeignKeyViolation`). Vì vậy kết quả nghiệm thu của hai dòng này ở bước xác nhận là "thay đổi bị từ chối, số đơn và tồn kho thay đổi 0"; còn ở bước chọn trạm (tạo nháp) thì trả đúng `CHARGING_ONLY`/`UNSUPPORTED_FAMILY`. Cần M1/M7 xác nhận cách hiểu này cho 2.3.1.
+**AE-10a ở bước xác nhận.** Ba dòng `STATION_CLOSED`, `STATION_MAINTENANCE`, `OUT_OF_STOCK` kiểm tra được đúng như AE-10a mô tả: tạo nháp khi trạm đủ điều kiện, đổi trạng thái/tồn kho, rồi xác nhận (bước 4–5). Hai dòng `CHARGING_ONLY` và `UNSUPPORTED_FAMILY` thì **không dựng được** theo cách đó: lệnh bỏ dịch vụ đổi pin hoặc bỏ hỗ trợ FAM_A của một trạm đang có bản nháp bị DB từ chối (`ForeignKeyViolation`). Vì vậy kết quả nghiệm thu của hai dòng này ở bước xác nhận là "thay đổi bị từ chối, số đơn và tồn kho thay đổi 0"; còn ở bước chọn trạm (tạo nháp) thì trả đúng `CHARGING_ONLY`/`UNSUPPORTED_FAMILY`. Như vậy hai dòng này **chưa đáp ứng** AE-10a ở bước xác nhận. Hai phương án xử lý và đề xuất nằm ở §8.4, chờ M1/M7 chốt.
 
 `request_hash` = SHA-256 hex của JSON chuẩn hóa (khóa sắp xếp, không khoảng trắng) gồm `draft_id`, `station_id`, `family_code`, `quantity`.
 
@@ -303,27 +382,117 @@ UPDATE station_battery_stock s SET available_batteries = s.available_batteries +
 ### 7.1 Đăng nhập demo và gọi API có phiên
 
 ```mermaid
-sequenceDiagram<br/>    autonumber<br/>    actor U as Người dùng<br/>    participant FE as Frontend<br/>    participant API as Backend<br/>    participant DB as PostgreSQL<br/>    U->>FE: Chọn USER-A<br/>    FE->>API: POST /demo-session {demo_user}<br/>    API->>DB: UPDATE user_session SET revoked_at (phiên cũ, nếu có)<br/>    API->>DB: INSERT user_session (HMAC(raw_sid), USER-A, expires_at)<br/>    API-->>FE: 201 + Set-Cookie vinergy_sid + csrf_token<br/>    FE->>API: POST /reservation-drafts (cookie + X-CSRF-Token)<br/>    API->>DB: SELECT user_id FROM user_session WHERE hash = HMAC(cookie)<br/>    alt không có / đã thu hồi<br/>        API-->>FE: 401 SESSION_REQUIRED<br/>    else hết hạn<br/>        API-->>FE: 401 SESSION_EXPIRED<br/>    else hợp lệ<br/>        API->>API: so CSRF bằng compare_digest<br/>        API-->>FE: tiếp tục xử lý với user_id từ phiên<br/>    end<br/>```
+sequenceDiagram
+    autonumber
+    actor U as Người dùng
+    participant FE as Frontend
+    participant API as Backend
+    participant DB as PostgreSQL
+    U->>FE: Chọn USER-A
+    FE->>API: POST /demo-session {demo_user}
+    API->>DB: UPDATE user_session SET revoked_at (phiên cũ, nếu có)
+    API->>DB: INSERT user_session (HMAC(raw_sid), USER-A, expires_at)
+    API-->>FE: 201 + Set-Cookie vinergy_sid + csrf_token
+    FE->>API: POST /reservation-drafts (cookie + X-CSRF-Token)
+    API->>DB: SELECT user_id FROM user_session WHERE hash = HMAC(cookie)
+    alt không có / đã thu hồi
+        API-->>FE: 401 SESSION_REQUIRED
+    else hết hạn
+        API-->>FE: 401 SESSION_EXPIRED
+    else hợp lệ
+        API->>API: so CSRF bằng compare_digest
+        API-->>FE: tiếp tục xử lý với user_id từ phiên
+    end
+```
 
 ### 7.2 Tạo bản nháp tại trạm gần nhất đủ điều kiện (AE-18)
 
 ```mermaid
-sequenceDiagram<br/>    autonumber<br/>    participant FE as Frontend / Chat<br/>    participant RS as Reservation Service<br/>    participant SS as Station Service<br/>    participant DB as PostgreSQL<br/>    FE->>RS: POST /reservation-drafts {family_code: FAM_A, quantity: 1, nearest: {lat, lng}}<br/>    RS->>SS: search(SWAPPING, FAM_A, only_open=true, radius)<br/>    SS->>DB: đọc trạm + tồn kho<br/>    SS-->>RS: ST-05 (0.0 km, OUT_OF_STOCK), ST-03 (1.16 km, eligible), ...<br/>    RS->>RS: chọn trạm đầu tiên booking_eligible = ST-03<br/>    RS->>DB: INSERT reservation_draft (ST-03, FAM_A, 1, expires_at)<br/>    Note over DB: tồn kho KHÔNG đổi (AE-09)<br/>    RS-->>FE: 201 draft {ST-03, 1.2 km, expires_at, hold_minutes}<br/>```
+sequenceDiagram
+    autonumber
+    participant FE as Frontend / Chat
+    participant RS as Reservation Service
+    participant SS as Station Service
+    participant DB as PostgreSQL
+    FE->>RS: POST /reservation-drafts {family_code: FAM_A, quantity: 1, nearest: {lat, lng}}
+    RS->>SS: search(SWAPPING, FAM_A, only_open=true, radius)
+    SS->>DB: đọc trạm + tồn kho
+    SS-->>RS: ST-05 (0.0 km, OUT_OF_STOCK), ST-03 (1.16 km, eligible), ...
+    RS->>RS: chọn trạm đầu tiên booking_eligible = ST-03
+    RS->>DB: INSERT reservation_draft (ST-03, FAM_A, 1, expires_at)
+    Note over DB: tồn kho KHÔNG đổi (AE-09)
+    RS-->>FE: 201 draft {ST-03, 1.2 km, expires_at, hold_minutes}
+```
 
 ### 7.3 Xác nhận, mất phản hồi và gửi lại (AE-10, AE-11)
 
 ```mermaid
-sequenceDiagram<br/>    autonumber<br/>    participant FE as Frontend<br/>    participant RS as Reservation Service<br/>    participant DB as PostgreSQL<br/>    FE->>RS: POST /reservations, Idempotency-Key K1, {draft, ST-01, FAM_A, 1}<br/>    RS->>DB: BEGIN, advisory lock(USER-A, K1)<br/>    RS->>DB: idempotency_record(K1)? → chưa có<br/>    RS->>DB: draft FOR UPDATE, station FOR SHARE<br/>    RS->>DB: UPDATE stock -1 WHERE available >= 1 → 1 dòng (6 → 5)<br/>    RS->>DB: INSERT reservation, INSERT idempotency_record(K1, hash)<br/>    RS->>DB: COMMIT<br/>    RS--xFE: 201 (phản hồi bị mất)<br/>    FE->>RS: gửi lại: K1, cùng body<br/>    RS->>DB: BEGIN, advisory lock, idempotency_record(K1) → có, cùng hash<br/>    RS->>DB: đối soát hết hạn đơn gốc (nếu đã quá hạn)<br/>    RS->>DB: COMMIT<br/>    RS-->>FE: 200 + Idempotent-Replayed: true, cùng reservation_id (tồn kho vẫn 5)<br/>```
+sequenceDiagram
+    autonumber
+    participant FE as Frontend
+    participant RS as Reservation Service
+    participant DB as PostgreSQL
+    FE->>RS: POST /reservations, Idempotency-Key K1, {draft, ST-01, FAM_A, 1}
+    RS->>DB: BEGIN, advisory lock(USER-A, K1)
+    RS->>DB: idempotency_record(K1)? → chưa có
+    RS->>DB: draft FOR UPDATE, station FOR SHARE
+    RS->>DB: UPDATE stock -1 WHERE available >= 1 → 1 dòng (6 → 5)
+    RS->>DB: INSERT reservation, INSERT idempotency_record(K1, hash)
+    RS->>DB: COMMIT
+    RS--xFE: 201 (phản hồi bị mất)
+    FE->>RS: gửi lại: K1, cùng body
+    RS->>DB: BEGIN, advisory lock, idempotency_record(K1) → có, cùng hash
+    RS->>DB: đối soát hết hạn đơn gốc (nếu đã quá hạn)
+    RS->>DB: COMMIT
+    RS-->>FE: 200 + Idempotent-Replayed: true, cùng reservation_id (tồn kho vẫn 5)
+```
 
 ### 7.4 Hai người tranh viên pin cuối (AE-13)
 
 ```mermaid
-sequenceDiagram<br/>    autonumber<br/>    participant A as USER-A<br/>    participant B as USER-B<br/>    participant DB as PostgreSQL<br/>    Note over DB: ST-01/FAM_A available = 1<br/>    par<br/>        A->>DB: UPDATE stock -1 WHERE available >= 1<br/>    and<br/>        B->>DB: UPDATE stock -1 WHERE available >= 1<br/>    end<br/>    DB-->>A: 1 dòng (khóa dòng, available = 0)<br/>    Note over B: chờ khóa dòng của A<br/>    A->>DB: INSERT reservation, COMMIT<br/>    DB-->>B: đánh giá lại WHERE: 0 >= 1 sai → 0 dòng<br/>    B->>DB: ROLLBACK<br/>    Note over A,B: A: 201 ACTIVE — B: 409 STATION_NOT_ELIGIBLE (OUT_OF_STOCK) — tồn kho 0<br/>```
+sequenceDiagram
+    autonumber
+    participant A as USER-A
+    participant B as USER-B
+    participant DB as PostgreSQL
+    Note over DB: ST-01/FAM_A available = 1
+    par
+        A->>DB: UPDATE stock -1 WHERE available >= 1
+    and
+        B->>DB: UPDATE stock -1 WHERE available >= 1
+    end
+    DB-->>A: 1 dòng (khóa dòng, available = 0)
+    Note over B: chờ khóa dòng của A
+    A->>DB: INSERT reservation, COMMIT
+    DB-->>B: đánh giá lại WHERE: 0 >= 1 sai → 0 dòng
+    B->>DB: ROLLBACK
+    Note over A,B: A: 201 ACTIVE — B: 409 STATION_NOT_ELIGIBLE (OUT_OF_STOCK) — tồn kho 0
+```
 
 ### 7.5 Hủy, chạy đua với hết hạn (AE-15, AE-16)
 
 ```mermaid
-sequenceDiagram<br/>    autonumber<br/>    participant FE as Frontend<br/>    participant RS as Reservation Service<br/>    participant W as Expiry Worker<br/>    participant DB as PostgreSQL<br/>    FE->>RS: POST /reservations/{id}/cancel<br/>    RS->>DB: BEGIN, SELECT … FOR UPDATE (chủ sở hữu)<br/>    W->>DB: UPDATE … SET EXPIRED WHERE status='ACTIVE' AND expires_at <= now<br/>    Note over W,DB: chờ khóa dòng của giao dịch hủy<br/>    alt now < expires_at<br/>        RS->>DB: UPDATE … CANCELLED WHERE status='ACTIVE' → 1 dòng, stock +1<br/>    else now >= expires_at<br/>        RS->>DB: UPDATE … EXPIRED WHERE status='ACTIVE' → 1 dòng, stock +1<br/>    end<br/>    RS->>DB: COMMIT<br/>    DB-->>W: đánh giá lại: status ≠ ACTIVE → 0 dòng, không hoàn pin<br/>    RS-->>FE: 200 {status: CANCELLED | EXPIRED}<br/>    FE->>RS: hủy lần nữa<br/>    RS-->>FE: 200 {status như cũ}, không hoàn pin thêm<br/>```
+sequenceDiagram
+    autonumber
+    participant FE as Frontend
+    participant RS as Reservation Service
+    participant W as Expiry Worker
+    participant DB as PostgreSQL
+    FE->>RS: POST /reservations/{id}/cancel
+    RS->>DB: BEGIN, SELECT … FOR UPDATE (chủ sở hữu)
+    W->>DB: UPDATE … SET EXPIRED WHERE status='ACTIVE' AND expires_at <= now
+    Note over W,DB: chờ khóa dòng của giao dịch hủy
+    alt now < expires_at
+        RS->>DB: UPDATE … CANCELLED WHERE status='ACTIVE' → 1 dòng, stock +1
+    else now >= expires_at
+        RS->>DB: UPDATE … EXPIRED WHERE status='ACTIVE' → 1 dòng, stock +1
+    end
+    RS->>DB: COMMIT
+    DB-->>W: đánh giá lại: status ≠ ACTIVE → 0 dòng, không hoàn pin
+    RS-->>FE: 200 {status: CANCELLED | EXPIRED}
+    FE->>RS: hủy lần nữa
+    RS-->>FE: 200 {status như cũ}, không hoàn pin thêm
+```
 
 ---
 
@@ -338,7 +507,7 @@ sequenceDiagram<br/>    autonumber<br/>    participant FE as Frontend<br/>    pa
 | Cho phép nhiều đơn `ACTIVE` mỗi người (SRS §8, AE-11a) | D-08, `MAX_ACTIVE_RESERVATIONS_PER_USER = 0` | Khớp; chờ M1/M2 xác nhận |
 | FR-06: trước khi xác nhận hiển thị mã/tên trạm, nhóm pin, số lượng 1, hạn nháp, thời lượng giữ | `draft.station.station_id`/`name`, `family_code`, `quantity`, `expires_at`, `hold_minutes` (api_contracts §6.3) | Khớp |
 | FR-06: sau khi thành công hiển thị mã đơn, trạng thái, hạn giữ thực tế | `reservation.reservation_id`, `status`, `expires_at` (api_contracts §6.6) | Khớp |
-| AE-10a: năm lý do từ chối | `STATION_NOT_ELIGIBLE` + `ineligibility_reason` lúc tạo nháp và lúc xác nhận | Khớp; hai dòng ở bước xác nhận cần thống nhất cách kiểm thử (§6.2) |
+| AE-10a: năm lý do từ chối | `STATION_NOT_ELIGIBLE` + `ineligibility_reason` lúc tạo nháp và lúc xác nhận | Lúc tạo nháp: khớp cả năm dòng. Lúc xác nhận: khớp ba dòng, **chưa đáp ứng** hai dòng `CHARGING_ONLY` và `UNSUPPORTED_FAMILY`. Chờ M1/M7 chốt (§8.4) |
 | Hạn có hiệu lực đến ngay trước mốc hết hạn (SRS §3) | `now >= expires_at` là hết hạn, cho cả nháp và đơn | Khớp |
 
 ### 8.2 Chờ M2/M6/M7
@@ -351,6 +520,21 @@ sequenceDiagram<br/>    autonumber<br/>    participant FE as Frontend<br/>    pa
 ### 8.3 Nếu nhóm chọn giới hạn đơn `ACTIVE`
 
 Thêm vào xác nhận, ngay sau bước (2): `SELECT pg_advisory_xact_lock(hashtextextended(:user || '|ACTIVE_LIMIT', 0))`, đối soát hết hạn các đơn của người dùng, đếm đơn `ACTIVE`; vượt `MAX_ACTIVE_RESERVATIONS_PER_USER` thì `409 ACTIVE_RESERVATION_LIMIT`. Không cần đổi lược đồ.
+
+### 8.4 AE-10a ở bước xác nhận (chờ M1/M7 chốt)
+
+AE-10a yêu cầu tạo nháp ở trạm đủ điều kiện, rồi chuyển trạm sang "chỉ sạc" hoặc "không hỗ trợ FAM_A" trước khi xác nhận. Lược đồ hiện tại không cho làm việc này. `fk_draft_battery_stock` trỏ từ bản nháp tới đúng dòng `station_battery_stock`, nên mọi lệnh xóa dòng đó đều bị từ chối. Bản nháp không bao giờ bị xóa, kể cả khi đã hết hạn. Vì vậy, chỉ cần từng có một bản nháp cho (trạm, nhóm) là trạm đó **không bao giờ** bỏ được dịch vụ đổi pin hay nhóm pin đó nữa, trừ khi đặt lại toàn bộ dữ liệu.
+
+| Phương án | Nội dung | Ảnh hưởng |
+| --- | --- | --- |
+| A. Giữ lược đồ | Hai dòng này chỉ kiểm tra ở bước tạo nháp. Ở bước xác nhận, kết quả nghiệm thu là "DB từ chối thay đổi, số đơn và tồn kho thay đổi 0" (đã kiểm chứng). | M1 sửa câu chữ AE-10a, M7 dùng cách hiểu này cho 2.3.1. Không đổi mã. |
+| B. Sửa thiết kế (đề xuất) | Thay `fk_draft_battery_stock` bằng hai khóa ngoại `station_id → station` và `family_code → battery_family`. Bước xác nhận đánh giá lại đủ thang `booking_eligibility` trên dữ liệu đã khóa, nên trả đúng `CHARGING_ONLY`/`UNSUPPORTED_FAMILY`. Thêm ràng buộc chặn xóa dòng tồn kho khi còn đơn `ACTIVE` dùng nó, để hủy/hết hạn luôn hoàn được pin. | Đáp ứng nguyên văn AE-10a và câu "dịch vụ/nhóm pin thay đổi trước xác nhận" của AE-10. Phải sửa `001_initial_schema.sql`. File này đang được bản SQLite dự phòng của backend và `check_seed.py` dùng chung, nên phải chạy lại 258 test backend, `check_seed.py` và script kiểm chứng. |
+
+Đề xuất chọn B, vì yêu cầu ghi rõ tình huống này và lỗi "không bao giờ bỏ được dịch vụ" là lỗi thật của lược đồ. M4 sẽ sửa sau khi M1/M7 đồng ý.
+
+### 8.5 Đồng bộ với prototype 2.1.2 (M3)
+
+Prototype 2.1.2 được dựng theo bản tạm rev 2 của §6 hợp đồng, nên gửi `draft_revision` và đọc các trường phản hồi mà hợp đồng v2.1 không có. Danh sách thay đổi phía client nằm ở [api_contracts.md §6.12](../architecture/api_contracts.md#612-thay-đổi-phía-client-so-với-bản-tạm-rev-2). M3 và M4 rà cùng nhau trước khi 2.2 bắt đầu nối API thật.
 
 ---
 
@@ -378,3 +562,4 @@ Bằng chứng chạy thử các câu SQL trên PostgreSQL: [Reservation_Design_
 | --- | --- | --- |
 | v2.0 draft | 2026-11-23 | Bản nháp đầu: trạng thái phiên/bản nháp/đơn/khóa, giao dịch xác nhận/hủy/hết hạn, ERD v2 (không đổi lược đồ), ma trận phân quyền, cấu hình đề xuất chờ 2.1.1. |
 | v2.1 draft | 2026-11-24 | Đối chiếu 2.1.1 (`840319d`): hạn nháp 5 phút, giữ pin 15 phút, cho phép nhiều đơn `ACTIVE`; thêm bảng đối chiếu §8.1 và ghi chú AE-10a ở bước xác nhận. Sửa lỗi: `lock_timeout` chỉ áp dụng cho advisory lock (trước đây chờ khóa dòng tồn kho quá 5 s sẽ bị báo nhầm `REQUEST_IN_PROGRESS`); worker dùng `pg_try_advisory_xact_lock` thay cho khóa cấp phiên. |
+| v2.2 draft | 2026-11-25 | Theo góp ý review: sửa định dạng 10 sơ đồ Mermaid (§3, §5, §7) bị gộp thành một dòng; ghi đúng trạng thái AE-10a là chưa đáp ứng ở bước xác nhận và nêu hai phương án chờ M1/M7 (§8.4); thêm §8.5 đồng bộ với 2.1.2; kiểm chứng thêm câu cuối AE-10b (đổi thời lượng giữ trong cấu hình). |

@@ -93,8 +93,11 @@ def _expire_one(conn, reservation_id: str, now: datetime) -> None:
     )
 
 
-def confirm(conn, user: str, key: str, body: dict, now: datetime, pause_after_stock: float = 0.0) -> dict:
-    """§6.2. Trả {'status': 201|200, 'reservation_id'}; lỗi nghiệp vụ ném Reject (giao dịch rollback)."""
+def confirm(conn, user: str, key: str, body: dict, now: datetime, pause_after_stock: float = 0.0,
+            hold: timedelta = HOLD) -> dict:
+    """§6.2. Trả {'status': 201|200, 'reservation_id'}; lỗi nghiệp vụ ném Reject (giao dịch rollback).
+
+    `hold` là RESERVATION_HOLD_MINUTES đang cấu hình (AE-10b: đổi cấu hình thì hạn đơn mới dịch theo)."""
     h = request_hash(body)
     with conn.transaction():
         conn.execute("SET LOCAL lock_timeout = '5s'")
@@ -152,7 +155,7 @@ def confirm(conn, user: str, key: str, body: dict, now: datetime, pause_after_st
         conn.execute(
             "INSERT INTO reservation (reservation_id, draft_id, status, created_at, expires_at)"
             " VALUES (%s, %s, 'ACTIVE', %s, %s)",
-            (rid, body["draft_id"], now, now + HOLD),
+            (rid, body["draft_id"], now, now + hold),
         )
         conn.execute(
             "INSERT INTO idempotency_record (user_id, operation, idempotency_key, request_hash, reservation_id, created_at)"
@@ -463,6 +466,17 @@ def scenarios(url: str) -> None:
         report("AE-10b chủ đơn đọc đúng T0 + 19 phút -> EXPIRED, kho về 6", at_19 == "EXPIRED" and stock(c) == 6)
         stranger = attempt(read_reservation, c, "USER-B", rid, T0 + timedelta(minutes=20))
         report("AE-14 USER-B đọc đơn của A -> RESERVATION_NOT_FOUND", code_of(stranger) == "RESERVATION_NOT_FOUND")
+
+    print("AE-10b: đổi thời lượng giữ trong cấu hình (20 phút thay cho 15)")
+    with fresh() as c:
+        d = create_draft(c, "USER-A", "ST-01", "FAM_A", T0)
+        rid = confirm(c, "USER-A", "key-ae10b-hold20-01", body_for(d), T0 + timedelta(minutes=4),
+                      hold=timedelta(minutes=20))["reservation_id"]
+        report("AE-10b cấu hình giữ 20 phút: xác nhận T0 + 4 -> hạn T0 + 24 (dịch 5 phút so với 15)",
+               count(c, "SELECT count(*) FROM reservation WHERE reservation_id = %s AND expires_at = %s",
+                     (rid, T0 + timedelta(minutes=24))) == 1)
+        at_19 = read_reservation(c, "USER-A", rid, T0 + timedelta(minutes=19))
+        report("AE-10b cấu hình 20 phút: lúc T0 + 19 đơn vẫn ACTIVE, kho 5", at_19 == "ACTIVE" and stock(c) == 5)
 
     print("AE-10a: năm trạm không đủ điều kiện, lúc tạo nháp")
     with fresh() as c:

@@ -19,7 +19,7 @@ backend\.venv\Scripts\python db/check_reservation_tx.py
 
 | Môi trường | Ngày | Kết quả |
 | --- | --- | --- |
-| Windows 11, Python 3.10.11, psycopg 3.3.9, PostgreSQL 18, CSDL `vinergy_test`, `main` tại `840319d` + nhánh `feat/2.1.3-reservation-design` | 2026-11-24 | **68/68 PASS** — "ĐẠT: mọi kiểm tra đều qua" |
+| Windows 11, Python 3.10.11, psycopg 3.3.9, PostgreSQL 18, CSDL `vinergy_test`, `main` tại `840319d` + nhánh `feat/2.1.3-reservation-design` | 2026-11-25 | **70/70 PASS** — "ĐẠT: mọi kiểm tra đều qua" |
 
 | Nhóm | Số kiểm tra | Nội dung đã kiểm chứng |
 | --- | ---: | --- |
@@ -35,6 +35,7 @@ backend\.venv\Scripts\python db/check_reservation_tx.py
 | AE-16d (5 vòng) | 5 | Hủy, worker, hủy chạy đồng thời quanh E: tồn kho luôn về 6 đúng một lần |
 | Worker (AE-16c) | 4 | Hoàn đúng số đơn của nhiều trạm (ST-01: 6 → 4 → 6, ST-03: 8 → 7 → 8); đơn chưa đến hạn giữ nguyên; chạy lại không hoàn thêm; không tồn kho âm |
 | AE-09a, AE-10b | 5 | Nháp tạo T0 hết hạn đúng T0 + 5 phút; xác nhận T0 + 4 phút → giữ đến T0 + 19 phút; lúc T0 + 5 phút nháp hết hạn nhưng đơn vẫn `ACTIVE`, kho 5; chủ đơn đọc đúng T0 + 19 phút → `EXPIRED`, kho 6; người khác đọc → `RESERVATION_NOT_FOUND` |
+| AE-10b (đổi cấu hình) | 2 | Giữ pin cấu hình 20 phút: xác nhận T0 + 4 phút → hạn T0 + 24 phút (dịch đúng 5 phút so với cấu hình 15); lúc T0 + 19 đơn vẫn `ACTIVE`, kho 5 |
 | AE-10a (lúc tạo nháp) | 5 | ST-02 `CHARGING_ONLY`, ST-04 `UNSUPPORTED_FAMILY`, ST-09 `STATION_CLOSED`, ST-13 `STATION_MAINTENANCE`, ST-05 `OUT_OF_STOCK`; không tạo nháp, tồn kho không đổi |
 | AE-10a (lúc xác nhận) | 5 | Tạo nháp ở ST-01 rồi đổi sang đóng cửa / bảo trì + kho 0 / hết pin A → đúng lý do, số đơn và tồn kho thay đổi 0. Bỏ dịch vụ đổi pin hoặc bỏ hỗ trợ FAM_A khi còn nháp → DB từ chối (`fk_draft_battery_stock`), kho giữ 6 |
 | AE-11a | 2 | Hai nháp, hai khóa của USER-A → hai đơn `ACTIVE` khác mã, kho 6 → 4; gửi lại xác nhận thứ hai trả đúng đơn thứ hai, kho vẫn 4 |
@@ -48,6 +49,7 @@ Sau khi script chạy, bộ test backend vẫn đạt **258 passed**, và `pytho
 | --- | --- | --- |
 | 2026-11-23 | 51/51 | Bản đầu, giá trị tạm 10 phút / 30 phút |
 | 2026-11-24 | 68/68 | Theo 2.1.1: 5 phút / 15 phút; thêm AE-09a, AE-10a (10 ca), AE-10b, AE-11a; tạo nháp kiểm tra `booking_eligibility`; `lock_timeout` chỉ áp dụng cho advisory lock; worker dùng `pg_try_advisory_xact_lock`. Ca AE-11 "gửi lại khi nháp hết hạn" dời từ T0 + 20 sang T0 + 10 phút, vì với giữ 15 phút thì lúc T0 + 20 chính đơn cũng đã hết hạn. |
+| 2026-11-25 | 70/70 | Theo góp ý review: thêm 2 kiểm tra cho câu cuối AE-10b (đổi thời lượng giữ trong cấu hình thì hạn đơn mới dịch theo). Sửa định dạng 10 sơ đồ Mermaid trong [Reservation_Design.md](./Reservation_Design.md). |
 
 ## Giới hạn
 
