@@ -84,3 +84,101 @@ export function errorResponse(status, code, message, details = [], headers = {})
   }
 }
 
+/** §4.2 Booking eligibility ladder — fixed order, first match wins. */
+export function evaluateBooking(station, familyCode) {
+  if (!familyCode) return { booking_eligible: null, ineligibility_reason: null }
+  if (!station.services.includes('SWAPPING')) {
+    return { booking_eligible: false, ineligibility_reason: 'CHARGING_ONLY' }
+  }
+  if (!station.supported_families.includes(familyCode)) {
+    return { booking_eligible: false, ineligibility_reason: 'UNSUPPORTED_FAMILY' }
+  }
+  if (station.opening_status === 'CLOSED') {
+    return { booking_eligible: false, ineligibility_reason: 'STATION_CLOSED' }
+  }
+  if (station.opening_status === 'MAINTENANCE') {
+    return { booking_eligible: false, ineligibility_reason: 'STATION_MAINTENANCE' }
+  }
+  const stock = station.available_batteries_by_family?.[familyCode]
+  if (stock === undefined || stock < 1) {
+    return { booking_eligible: false, ineligibility_reason: 'OUT_OF_STOCK' }
+  }
+  return { booking_eligible: true, ineligibility_reason: null }
+}
+
+/** §6.2 Validate quantity: required JSON number, integer strictly equal to 1 (BR-05, AE-08). */
+function validateQuantity(value, details) {
+  if (value === undefined) {
+    details.push({
+      field: 'quantity',
+      reason: 'REQUIRED',
+      message: 'quantity là bắt buộc.',
+    })
+    return false
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    details.push({
+      field: 'quantity',
+      reason: 'NOT_A_NUMBER',
+      message: 'quantity phải là kiểu số JSON.',
+    })
+    return false
+  }
+  if (!Number.isInteger(value) || value !== 1) {
+    details.push({
+      field: 'quantity',
+      reason: 'MUST_BE_ONE',
+      message: 'quantity bắt buộc là số nguyên đúng bằng 1 (BR-05).',
+    })
+    return false
+  }
+  return true
+}
+
+function validateFamilyCode(value, details) {
+  if (value === undefined) {
+    details.push({ field: 'family_code', reason: 'REQUIRED', message: 'family_code là bắt buộc.' })
+    return false
+  }
+  if (typeof value !== 'string') {
+    details.push({ field: 'family_code', reason: 'INVALID_FORMAT', message: 'family_code phải là chuỗi.' })
+    return false
+  }
+  if (!FAMILY_CODES.includes(value)) {
+    details.push({
+      field: 'family_code',
+      reason: 'NOT_IN_ENUM',
+      message: 'family_code phải là FAM_A hoặc FAM_B.',
+    })
+    return false
+  }
+  return true
+}
+
+function validateUnknownFields(obj, allowedKeys, details, prefix = '') {
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) {
+      const fieldName = prefix ? `${prefix}.${key}` : key
+      details.push({
+        field: fieldName,
+        reason: 'UNKNOWN_FIELD',
+        message: `Trường ${fieldName} không được hỗ trợ trong hợp đồng API v2.1.`,
+      })
+    }
+  }
+}
+
+function validateSession(session, nowMs) {
+  if (!session || !session.demo_user) {
+    return errorResponse(401, 'SESSION_REQUIRED', 'Vui lòng chọn phiên người dùng demo để tiếp tục.')
+  }
+  if (session.expired || (session.expires_at && nowMs >= Date.parse(session.expires_at))) {
+    return errorResponse(
+      401,
+      'SESSION_EXPIRED',
+      'Phiên demo đã hết hạn. Vui lòng chọn lại người dùng demo để tiếp tục.',
+    )
+  }
+  return null
+}
+
