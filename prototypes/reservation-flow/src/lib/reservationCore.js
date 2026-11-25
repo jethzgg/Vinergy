@@ -1,0 +1,86 @@
+/**
+ * Vinergy — Reservation domain logic (WBS 2.1.2 prototype, aligned with API v2.2 / WBS 2.1.3).
+ *
+ * Pure and framework-free, implementing:
+ *   - docs/architecture/api_contracts.md §1.3, §2, §3, §4.2, §6.1–§6.12
+ *   - docs/requirements/SRS.md BR-01…BR-10, FR-06…FR-09, FR-12
+ *   - docs/requirements/Acceptance_Examples_and_Sample_Data.md AE-08…AE-18, AE-23f
+ *
+ * Runs identically in the browser (src/lib/reservationApi.js) and under plain
+ * Node (scripts/check-oracle.mjs).
+ */
+
+const EARTH_RADIUS_KM = 6371
+const toRad = (deg) => (deg * Math.PI) / 180
+
+export const DEMO_USERS = ['USER-A', 'USER-B']
+export const FAMILY_CODES = ['FAM_A', 'FAM_B']
+export const RESERVATION_STATUSES = ['ACTIVE', 'CANCELLED', 'EXPIRED']
+
+// Configurable simulation defaults (SRS §8 / API v2.1: draft 5m, hold 15m).
+export const DEFAULT_CONFIG = {
+  draftTtlMinutes: 5,
+  holdMinutes: 15,
+}
+
+export const INELIGIBILITY_TEXT = {
+  CHARGING_ONLY: 'Chỉ có cổng sạc — không hỗ trợ đặt trước',
+  UNSUPPORTED_FAMILY: 'Không hỗ trợ nhóm pin đang chọn',
+  STATION_CLOSED: 'Trạm đang đóng cửa',
+  STATION_MAINTENANCE: 'Trạm đang bảo trì',
+  OUT_OF_STOCK: 'Hết pin khả dụng',
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const STATION_ID_RE = /^[A-Z0-9-]{1,32}$/
+const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{16,100}$/
+
+export function haversineKm(from, to) {
+  const dLat = toRad(to.lat - from.lat)
+  const dLng = toRad(to.lng - from.lng)
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) ** 2
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)))
+}
+
+export function formatDistance(km) {
+  const rounded = Math.floor(Math.abs(km) * 10 + 0.5) / 10
+  const signed = km < 0 && rounded !== 0 ? -rounded : rounded
+  return `${(signed === 0 ? 0 : signed).toFixed(1)} km`
+}
+
+const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+export function makeRequestId() {
+  let out = ''
+  for (let i = 0; i < 26; i += 1) {
+    out += B32[Math.floor(Math.random() * B32.length)]
+  }
+  return `req_${out}`
+}
+
+/** Generate standard lowercase UUID v4 (§6.1, §6.2). */
+export function makeUuid() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID().toLowerCase()
+  }
+  const hex = () => Math.floor(Math.random() * 16).toString(16)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16)
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16) || hex()
+  })
+}
+
+export function errorResponse(status, code, message, details = [], headers = {}) {
+  return {
+    status,
+    ok: false,
+    headers,
+    body: {
+      error: { code, message, details },
+      request_id: makeRequestId(),
+    },
+  }
+}
+
