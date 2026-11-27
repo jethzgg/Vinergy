@@ -32,6 +32,10 @@ class StationService:
             "stations": stations,
         }
 
+    def station(self, station_id: str):
+        """Domain `Station` (or None), for callers that apply their own rules (reservation drafts)."""
+        return self._repo.get(station_id)
+
     def detail(self, q: DetailQuery) -> dict:
         station = self._repo.get(q.station_id)
         if station is None:

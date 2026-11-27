@@ -9,7 +9,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import errors
+from app.core.config import get_settings
 from app.llm.spike_router import router as spike_router
+from app.reservations.config import ReservationSettings
+from app.reservations.router import router as reservations_router
+from app.reservations.service import ReservationService
 from app.stations.repository import postgres_repository, sqlite_repository
 from app.stations.router import router as stations_router
 from app.stations.service import StationService
@@ -38,9 +42,19 @@ def _station_repository():
     return sqlite_repository()
 
 
-# Tests can swap this service (see tests/conftest.py).
+def _reservation_service():
+    """Reservations need PostgreSQL (row locks, advisory locks). Without it the endpoints answer 500."""
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        return None
+    return ReservationService(database_url, ReservationSettings.from_env(), get_settings().session_secret)
+
+
+# Tests can swap these services (see tests/conftest.py, tests/test_reservations_postgres.py).
 app.state.station_service = StationService(_station_repository())
+app.state.reservation_service = _reservation_service()
 app.include_router(stations_router)
+app.include_router(reservations_router)
 app.include_router(spike_router)
 
 allowed_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
@@ -50,6 +64,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The reservation client reads these on cross-origin responses (api_contracts §6.7).
+    expose_headers=["X-Request-Id", "Location", "Idempotent-Replayed", "Retry-After"],
 )
 
 

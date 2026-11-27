@@ -24,6 +24,23 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # Throwaway PostgreSQL so the reservation and station integration tests run instead of skipping.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: vinergy
+          POSTGRES_PASSWORD: vinergy
+          POSTGRES_DB: vinergy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vinergy -d vinergy_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://vinergy:vinergy@localhost:5432/vinergy_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

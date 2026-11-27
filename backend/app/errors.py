@@ -31,12 +31,20 @@ def new_request_id() -> str:
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, message: str, details: list | None = None):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        details: list | None = None,
+        headers: dict | None = None,
+    ):
         super().__init__(code)
         self.status = status
         self.code = code
         self.message = message
         self.details = details or []
+        self.headers = headers or {}
 
     @classmethod
     def invalid_input(cls, details: list) -> "ApiError":
@@ -47,7 +55,14 @@ class ApiError(Exception):
         return cls(404, "STATION_NOT_FOUND", "Không tìm thấy trạm.")
 
 
-def error_response(request: Request, status: int, code: str, message: str, details: list) -> JsonUtf8Response:
+def error_response(
+    request: Request,
+    status: int,
+    code: str,
+    message: str,
+    details: list,
+    headers: dict | None = None,
+) -> JsonUtf8Response:
     request_id = getattr(request.state, "request_id", None) or new_request_id()
     return JsonUtf8Response(
         status_code=status,
@@ -55,7 +70,7 @@ def error_response(request: Request, status: int, code: str, message: str, detai
             "error": {"code": code, "message": message, "details": details},
             "request_id": request_id,
         },
-        headers={"X-Request-Id": request_id},
+        headers={**(headers or {}), "X-Request-Id": request_id},
     )
 
 
@@ -73,7 +88,7 @@ def install(app: FastAPI) -> None:
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError):
-        return error_response(request, exc.status, exc.code, exc.message, exc.details)
+        return error_response(request, exc.status, exc.code, exc.message, exc.details, exc.headers)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException):
