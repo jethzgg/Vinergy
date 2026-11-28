@@ -21,6 +21,7 @@ from app.reservations.config import ReservationSettings
 from app.reservations.service import ReservationService
 from app.reservations.validation import ConfirmRequest, DraftRequest
 from app.stations.repository import MIGRATIONS_DIR, REPO_ROOT, SEED_SQL
+from app.stations.service import StationService
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -563,3 +564,187 @@ def test_ae17_same_draft_two_keys_concurrently(svc, url, monkeypatch):
     assert sum(1 for r in results if r[0] == 201) == 1
     assert [r for r in results if r[0] != 201] == [("DRAFT_ALREADY_USED", None)]
     assert (stock(url), scalar(url, "SELECT count(*) FROM reservation")) == (5, 1)
+
+
+# --- review fixes: decision time after the lock waits (AE-09a, AE-10b) ---------------------------
+
+def wait_until_blocked(url, timeout=10.0):
+    """Return once some other backend of this database is waiting on a lock."""
+    pause = threading.Event()
+    for _ in range(int(timeout / 0.02)):
+        if scalar(url, "SELECT count(*) FROM pg_stat_activity"
+                       " WHERE datname = current_database() AND wait_event_type = 'Lock'"):
+            return
+        pause.wait(0.02)
+    pytest.fail("the confirmation never queued behind the held lock")
+
+
+def run_behind_stock_lock(url, clock, fn, args, wait_from, release_at):
+    """Hold ST-01's stock rows, start fn(*args) at `wait_from`, move the clock to `release_at`
+    while it is queued, then release the rows. Returns outcome(fn, *args)."""
+    result = {}
+    with psycopg.connect(url, autocommit=True) as holder, holder.transaction():
+        holder.execute("SELECT 1 FROM station_battery_stock WHERE station_id = 'ST-01' FOR UPDATE").fetchall()
+        clock.now = wait_from
+        worker = threading.Thread(target=lambda: result.setdefault("r", outcome(fn, *args)))
+        worker.start()
+        wait_until_blocked(url)
+        clock.now = release_at
+    worker.join(timeout=30)
+    return result["r"]
+
+
+def test_ae09a_draft_expiring_while_queued_is_rejected(svc, url, clock):
+    """Arrive 08:04:59, wait on another transaction's stock lock until 08:05:00: the draft is expired."""
+    d = draft(svc)
+    before = totals(url)
+    got = run_behind_stock_lock(url, clock, svc.confirm, ("USER-A", confirm_req(d, KEY_A1)),
+                                wait_from=T0 + 5 * MIN - timedelta(seconds=1), release_at=T0 + 5 * MIN)
+    assert got == ("DRAFT_STALE", "DRAFT_EXPIRED")
+    assert totals(url) == before
+    assert (stock(url), scalar(url, "SELECT count(*) FROM reservation")) == (6, 0)
+
+
+def test_ae10b_hold_starts_when_the_locks_are_granted(svc, url, clock):
+    """Queued 08:01 -> 08:03: the order is created at 08:03 and held a full 15 minutes, until 08:18."""
+    d = draft(svc)
+    status, rid = run_behind_stock_lock(url, clock, svc.confirm, ("USER-A", confirm_req(d, KEY_A1)),
+                                        wait_from=T0 + 1 * MIN, release_at=T0 + 3 * MIN)
+    assert status == 201
+    created, expires = sql(url, "SELECT created_at, expires_at FROM reservation WHERE reservation_id = %s",
+                           (rid,))[0]
+    assert (created, expires) == (T0 + 3 * MIN, T0 + 18 * MIN)
+    assert scalar(url, "SELECT created_at FROM idempotency_record") == T0 + 3 * MIN
+    assert stock(url) == 5
+
+
+def test_replay_reaching_hold_expiry_while_queued_expires_once(svc, url, clock):
+    """A retry that waits across the hold deadline (08:15) reports EXPIRED and returns the battery."""
+    d = draft(svc)
+    status, reservation = svc.confirm("USER-A", confirm_req(d, KEY_A1))
+    assert (status, stock(url)) == (201, 5)
+    got = run_behind_stock_lock(url, clock, svc.confirm, ("USER-A", confirm_req(d, KEY_A1)),
+                                wait_from=T0 + 15 * MIN - timedelta(seconds=1), release_at=T0 + 15 * MIN)
+    assert got == (200, reservation["reservation_id"])
+    assert scalar(url, "SELECT status FROM reservation") == "EXPIRED"
+    assert stock(url) == 6
+
+
+# --- review fixes: a nearest draft is built from the snapshot it was chosen from ------------------
+
+NEAR_ST03 = {"lat": 21.0032, "lng": 105.856}
+
+
+def test_nearest_draft_never_shows_open_with_zero_stock(client, url, monkeypatch):
+    """Another order takes ST-03's last battery right after the search. The draft reflects the data
+    it was chosen from (never OPEN with 0 available), and confirmation re-checks stock on its own."""
+    sql(url, "UPDATE station_battery_stock SET available_batteries = 1"
+             " WHERE station_id = 'ST-03' AND family_code = 'FAM_A'")
+    original = StationService.search
+
+    def search_then_competitor_takes_last(self, query):
+        result = original(self, query)
+        sql(url, "UPDATE station_battery_stock SET available_batteries = 0"
+                 " WHERE station_id = 'ST-03' AND family_code = 'FAM_A'")
+        return result
+
+    monkeypatch.setattr(StationService, "search", search_then_competitor_takes_last)
+    session = login(url)
+    response = call(client, "POST", "/api/v1/reservation-drafts", session=session,
+                    body={"family_code": "FAM_A", "quantity": 1, "nearest": NEAR_ST03})
+    monkeypatch.setattr(StationService, "search", original)
+    d = response.json()["draft"]
+    assert response.status_code == 201
+    assert (d["status"], d["station"]["station_id"], d["available_batteries"]) == ("OPEN", "ST-03", 1)
+    confirmed = call(client, "POST", "/api/v1/reservations", session=session, key=KEY_A1, body=body_of(d))
+    assert error(confirmed) == (409, "STATION_NOT_ELIGIBLE", ["OUT_OF_STOCK"])
+
+
+def test_nearest_moves_on_to_the_next_eligible_station(client, url):
+    sql(url, "UPDATE station_battery_stock SET available_batteries = 0"
+             " WHERE station_id = 'ST-03' AND family_code = 'FAM_A'")
+    response = call(client, "POST", "/api/v1/reservation-drafts", session=login(url),
+                    body={"family_code": "FAM_A", "quantity": 1, "nearest": NEAR_ST03})
+    d = response.json()["draft"]
+    assert response.status_code == 201
+    assert d["station"]["station_id"] == "ST-01"
+    assert d["station"]["distance_km"] == pytest.approx(1.312927744364184, abs=1e-12)
+    assert (d["status"], d["available_batteries"]) == ("OPEN", 6)
+
+
+# --- review fixes: undeclared query parameters, no-store on errors -------------------------------
+
+@pytest.mark.parametrize("param", ["owner", "user_id", "demo_user"])
+def test_identity_query_parameter_is_rejected_before_any_write(client, url, svc, param):
+    session = login(url)
+    d = draft(svc)
+    before = (totals(url), scalar(url, "SELECT count(*) FROM reservation_draft"))
+    created = call(client, "POST", f"/api/v1/reservation-drafts?{param}=USER-B", session=session,
+                   body={"family_code": "FAM_A", "quantity": 1, "station_id": "ST-01"})
+    confirmed = call(client, "POST", f"/api/v1/reservations?{param}=USER-B", session=session, key=KEY_A1,
+                     body=body_of(d))
+    read = call(client, "GET", f"/api/v1/reservation-drafts/{d['draft_id']}?{param}=USER-B", session=session)
+    for response in (created, confirmed, read):
+        assert error(response) == (400, "INVALID_INPUT", ["UNKNOWN_PARAM"])
+        assert response.json()["error"]["details"][0]["field"] == param
+    assert (totals(url), scalar(url, "SELECT count(*) FROM reservation_draft")) == before
+    # Nothing was recorded for the rejected confirmation, so the same key still makes the order.
+    retry = call(client, "POST", "/api/v1/reservations", session=session, key=KEY_A1, body=body_of(d))
+    assert retry.status_code == 201
+
+
+def test_query_parameter_check_keeps_the_middleware_order(client, url):
+    """Unknown query parameters are validation (§1.3 step 6): session and CSRF still answer first."""
+    path = "/api/v1/reservation-drafts?owner=USER-B"
+    body = {"family_code": "FAM_A", "quantity": 1, "station_id": "ST-01"}
+    assert error(call(client, "POST", path, body=body))[:2] == (401, "SESSION_REQUIRED")
+    assert error(call(client, "POST", path, session=login(url), csrf=False, body=body))[:2] == (403, "CSRF_INVALID")
+
+
+def test_unknown_params_come_after_body_errors(client, url):
+    response = call(client, "POST", "/api/v1/reservation-drafts?b=1&a=2&b=3", session=login(url),
+                    body={"family_code": "FAM_A", "quantity": 2, "station_id": "ST-01", "x": 1})
+    fields = [(d["field"], d["reason"]) for d in response.json()["error"]["details"]]
+    assert fields == [("quantity", "MUST_BE_ONE"), ("x", "UNKNOWN_FIELD"),
+                      ("b", "UNKNOWN_PARAM"), ("a", "UNKNOWN_PARAM")]
+
+
+def test_every_reservation_response_is_no_store(client, url, svc):
+    """§6: no-store on success AND on errors, since every answer depends on the session."""
+    a, b = login(url, "USER-A"), login(url, "USER-B")
+    d = draft(svc)
+    path = f"/api/v1/reservation-drafts/{d['draft_id']}"
+    responses = {
+        "other owner 404": call(client, "GET", path, session=b),
+        "no session 401": call(client, "GET", path),
+        "bad id 400": call(client, "GET", "/api/v1/reservation-drafts/not-a-uuid", session=a),
+        "csrf 403": call(client, "POST", "/api/v1/reservations", session=a, csrf=False, key=KEY_A1,
+                         body=body_of(d)),
+        "media 415": call(client, "POST", "/api/v1/reservation-drafts", session=a, body="x",
+                          content_type="text/plain"),
+        "ineligible 409": call(client, "POST", "/api/v1/reservation-drafts", session=a,
+                               body={"family_code": "FAM_A", "quantity": 1, "station_id": "ST-02"}),
+        "owner read 200": call(client, "GET", path, session=a),
+        "created 201": call(client, "POST", "/api/v1/reservations", session=a, key=KEY_A1, body=body_of(d)),
+        "replay 200": call(client, "POST", "/api/v1/reservations", session=a, key=KEY_A1, body=body_of(d)),
+    }
+    assert error(responses["other owner 404"])[:2] == (404, "DRAFT_NOT_FOUND")
+    assert [r.status_code for r in responses.values()] == [404, 401, 400, 403, 415, 409, 200, 201, 200]
+    for label, response in responses.items():
+        assert response.headers.get("cache-control") == "no-store", label
+
+
+def test_unexpected_failure_is_a_no_store_500(client, url, svc, monkeypatch):
+    session = login(url)
+    d = draft(svc)
+
+    def boom(*_args):
+        raise RuntimeError("simulated database outage")
+
+    monkeypatch.setattr(svc, "get_draft", boom)
+    response = TestClient(app, raise_server_exceptions=False).get(
+        f"/api/v1/reservation-drafts/{d['draft_id']}",
+        headers={"Cookie": f"{demo_session.SESSION_COOKIE}={session[0]}"})
+    assert error(response)[:2] == (500, "INTERNAL_ERROR")
+    assert response.headers.get("cache-control") == "no-store"
+    assert "simulated" not in response.text

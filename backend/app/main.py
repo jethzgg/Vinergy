@@ -43,7 +43,11 @@ def _station_repository():
 
 
 def _reservation_service():
-    """Reservations need PostgreSQL (row locks, advisory locks). Without it the endpoints answer 500."""
+    """Reservations need PostgreSQL (row locks, advisory locks). Without it the endpoints answer 500.
+
+    With DATABASE_URL set, startup fails with SessionSecretError when SESSION_SECRET is
+    empty or the public sample value: the service never runs with a known session key.
+    """
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
         return None

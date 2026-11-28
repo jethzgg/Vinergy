@@ -25,7 +25,12 @@ def iso(value: Optional[datetime]) -> Optional[str]:
 
 def station_in_tx(conn, station_id: str) -> Optional[Station]:
     """Read the station (status, swap/charge rows, stock) inside the caller's transaction."""
-    return SqlStationRepository(lambda: nullcontext(conn), placeholder="%s").get(station_id)
+    return station_repository_in_tx(conn).get(station_id)
+
+
+def station_repository_in_tx(conn) -> SqlStationRepository:
+    """Station repository bound to the caller's connection, so every read shares its transaction."""
+    return SqlStationRepository(lambda: nullcontext(conn), placeholder="%s")
 
 
 # --- drafts ---------------------------------------------------------------------------
@@ -124,6 +129,20 @@ def insert_reservation(conn, reservation_id: str, draft_id: str, created_at: dat
         " VALUES (%s, %s, 'ACTIVE', %s, %s)",
         (reservation_id, draft_id, created_at, expires_at),
     )
+
+
+def lock_reservation_rows(conn, reservation_id: str) -> None:
+    """Replay path: take the rows expire_if_due may change, in the confirmation lock order
+    (draft -> station -> stock -> reservation), so the caller can read `now` after waiting."""
+    row = conn.execute(
+        "SELECT d.draft_id, d.station_id FROM reservation r JOIN reservation_draft d ON d.draft_id = r.draft_id"
+        " WHERE r.reservation_id = %s",
+        (reservation_id,),
+    ).fetchone()
+    draft_id, station_id = row
+    conn.execute("SELECT 1 FROM reservation_draft WHERE draft_id = %s FOR UPDATE", (draft_id,))
+    lock_station_and_stock(conn, station_id)
+    conn.execute("SELECT 1 FROM reservation WHERE reservation_id = %s FOR UPDATE", (reservation_id,))
 
 
 def expire_if_due(conn, reservation_id: str, now: datetime) -> bool:

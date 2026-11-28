@@ -1,6 +1,6 @@
 # Vinergy — Thiết kế đặt pin: trạng thái, dữ liệu và giao dịch (WBS 2.1.3)
 
-> **Trạng thái:** Draft v2.2 (Sprint 2, Task 2.1.3), đã đối chiếu 2.1.1 (`840319d`) và góp ý review 25/11, chờ rà soát | **Phụ trách:** M4 (Bui Quang Minh), rà soát cùng M1, M2, M3, M6, M7
+> **Trạng thái:** Draft v2.3 (Sprint 2, Task 2.1.3), đã đối chiếu 2.1.1 (`840319d`), góp ý review 25/11 và review 2.2.1 ngày 28/11, chờ rà soát | **Phụ trách:** M4 (Bui Quang Minh), rà soát cùng M1, M2, M3, M6, M7
 > **Tham chiếu:** [SRS.md](../requirements/SRS.md) v0.4 BR-05…BR-10, FR-06…FR-09, §8; [Acceptance_Examples_and_Sample_Data.md](../requirements/Acceptance_Examples_and_Sample_Data.md) v0.4 AE-08…AE-18 (gồm AE-09a, AE-10a, AE-10b, AE-11a của 2.1.1); [architecture.md](../architecture/architecture.md) AD-04, AD-07, AD-09; [api_contracts.md](../architecture/api_contracts.md) §3, §6; [Database_Design.md](./Database_Design.md)
 > **Phạm vi:** Thiết kế mà 2.2 (M2/M5/M6) dùng để triển khai form đặt pin, xem, hủy và hết hạn đơn. Hợp đồng HTTP chi tiết nằm ở [api_contracts.md §6](../architecture/api_contracts.md#6-đặt-pin-sprint-2). Tài liệu này giải thích **vì sao** và **giao dịch chạy thế nào**.
 
@@ -17,7 +17,7 @@ Các giá trị đánh dấu **(đề xuất M1, SRS §8)** lấy từ 2.1.1 (24
 | D-03 | Tạo bản nháp chỉ thành công khi trạm **đủ điều kiện đặt pin tại thời điểm đó**, nhưng **không trừ tồn kho**. | Không đưa ra đề xuất chắc chắn thất bại (AE-03: ST-02 bị từ chối ngay khi tạo bản nháp). Xác nhận vẫn kiểm tra lại nguyên tử. | BR-06, BR-07 |
 | D-04 | Idempotency dùng **advisory lock theo (người dùng, thao tác, khóa)** đầu giao dịch, và chỉ ghi `idempotency_record` khi tạo đơn thành công. | Yêu cầu cùng khóa chạy đồng thời xếp hàng thay vì cùng tạo đơn. Không cần trạng thái "đang xử lý" trong DB nên lược đồ v0 giữ nguyên. | BR-08, AE-11 |
 | D-05 | Mọi chuyển trạng thái của đơn là `UPDATE … WHERE status = 'ACTIVE'` có điều kiện thời gian. Chỉ khi đúng 1 dòng thay đổi mới hoàn pin, trong **cùng câu lệnh/giao dịch**. | Hủy, đối soát khi đọc và tác vụ nền chạy đua vẫn chỉ hoàn pin một lần. | BR-09, AE-15, AE-16d |
-| D-06 | Thời gian quyết định hủy hay hết hạn là `Clock.now()` của server, lấy **một lần** ở đầu giao dịch và truyền vào SQL. Không dùng `now()` của DB trong logic nghiệp vụ. | Đồng hồ điều khiển được trong test (AE-16), và CHECK của bảng `reservation` dùng cùng mốc. | AD-07, BR-09 |
+| D-06 | Thời gian quyết định hủy hay hết hạn là `Clock.now()` của server, đọc **một lần sau khi giao dịch đã có đủ khóa** (lần chờ cuối cùng), rồi truyền vào SQL cho mọi so sánh và mọi cột thời gian còn lại của giao dịch. Không dùng `now()` của DB trong logic nghiệp vụ. | Đồng hồ điều khiển được trong test (AE-16), và CHECK của bảng `reservation` dùng cùng mốc. Đọc sau khi chờ khóa để thời gian xếp hàng không giữ được bản nháp đã hết hạn (AE-09a) và không làm ngắn thời gian giữ pin (AE-10b). | AD-07, BR-09 |
 | D-07 | CSRF token **suy ra** từ session id: `HMAC(SESSION_SECRET, "csrf:" + raw_sid)`. Không thêm cột. | Bảng `user_session` v0 đủ dùng, và `GET /demo-session` luôn trả lại được token. | AD-04 |
 | D-08 | Không giới hạn số đơn `ACTIVE` mỗi người: mỗi bản nháp hợp lệ, còn tồn kho tạo được một đơn riêng. Giữ sẵn cấu hình và mã lỗi nếu nhóm đổi chính sách. | Đề xuất M1 ở 2.1.1 (SRS §8), chờ M1/M2 xác nhận. | AE-08, AE-11, AE-11a |
 | D-09 | Bản nháp tham chiếu trạm và nhóm pin riêng. Giao dịch xác nhận đánh giá lại điều kiện đổi pin trước khi trừ kho. | Giữ lịch sử bản nháp khi trạm đổi dịch vụ hoặc ngừng hỗ trợ một nhóm pin. | AE-10a, §5 và §8.4 |
@@ -246,11 +246,11 @@ erDiagram
 
 ## 6. Giao dịch nguyên tử
 
-Mọi giao dịch chạy ở mức `READ COMMITTED` (mặc định PostgreSQL). Tính đúng đắn dựa vào **khóa dòng của `UPDATE`/`SELECT … FOR UPDATE`** và việc PostgreSQL **đánh giá lại `WHERE`** sau khi chờ khóa, không dựa vào mức cô lập cao. `:now` là `Clock.now()` lấy một lần ở đầu giao dịch (D-06).
+Mọi giao dịch chạy ở mức `READ COMMITTED` (mặc định PostgreSQL). Tính đúng đắn dựa vào **khóa dòng của `UPDATE`/`SELECT … FOR UPDATE`** và việc PostgreSQL **đánh giá lại `WHERE`** sau khi chờ khóa, không dựa vào mức cô lập cao. `:now` là `Clock.now()` đọc một lần ngay sau lần chờ khóa cuối cùng của giao dịch (D-06).
 
 ### 6.1 Tạo bản nháp
 
-Không giữ tồn kho nên không cần khóa:
+Không giữ tồn kho nên không cần khóa. Các bước 1–3 chạy trong **một** giao dịch `REPEATABLE READ`, nên việc chọn trạm, dựng phản hồi (`available_batteries`) và ghi nháp dùng cùng một ảnh chụp dữ liệu: không bao giờ trả nháp `OPEN` cho một trạm mà chính dữ liệu dùng để chọn đã cho thấy hết pin. Nếu bước kiểm tra khóa ngoại gặp `serialization_failure` vì dòng trạm vừa bị sửa, giao dịch được thử lại trên ảnh chụp mới (tối đa 3 lần). Tồn kho vẫn có thể thay đổi sau đó, vì vậy bước xác nhận luôn kiểm tra lại trên dòng đã khóa (§6.2).
 
 1. Xác định trạm:
    - `station_id`: đọc trạm, tính `booking_eligible` bằng chính hàm của Station Service (api_contracts §4.2).
@@ -274,7 +274,8 @@ SET LOCAL lock_timeout = 0;            -- chỉ giới hạn thời gian chờ a
 -- (2) Khóa đã dùng? (trước mọi kiểm tra bản nháp/trạm, BR-08)
 SELECT request_hash, reservation_id FROM idempotency_record
  WHERE user_id = :user AND operation = 'CONFIRM_RESERVATION' AND idempotency_key = :key;
---   có, cùng hash  → đối soát hết hạn (§6.4) cho reservation_id → COMMIT → 200 + Idempotent-Replayed
+--   có, cùng hash  → khóa nháp → trạm → tồn kho → đơn (cùng thứ tự bước 3–4), đọc :now,
+--                    đối soát hết hạn (§6.4) cho reservation_id → COMMIT → 200 + Idempotent-Replayed
 --   có, khác hash  → ROLLBACK → 409 IDEMPOTENCY_KEY_REUSED
 
 -- (3) Khóa bản nháp của chính người dùng
@@ -284,12 +285,13 @@ SELECT station_id, family_code, quantity, expires_at FROM reservation_draft
 SELECT 1 FROM reservation WHERE draft_id = :draft;
 --   có                                → 409 DRAFT_ALREADY_USED
 --   body lệch station/family/quantity → 409 DRAFT_STALE (CONTENT_MISMATCH)
---   :now >= expires_at                → 409 DRAFT_STALE (DRAFT_EXPIRED)
 
--- (4) Khóa trạng thái trạm và tồn kho theo thứ tự cố định
+-- (4) Khóa trạng thái trạm và tồn kho theo thứ tự cố định (lần chờ khóa cuối cùng)
 SELECT opening_status FROM station WHERE station_id = :station FOR SHARE;
 SELECT family_code, available_batteries FROM station_battery_stock
  WHERE station_id = :station ORDER BY family_code FOR UPDATE;
+-- Đọc :now = Clock.now() tại đây (D-06), sau mọi lần chờ.
+--   :now >= draft.expires_at          → 409 DRAFT_STALE (DRAFT_EXPIRED)
 -- Đánh giá booking_eligibility với dịch vụ, nhóm, trạng thái và số lượng hiện tại (§4.2 API).
 -- Nếu không đủ điều kiện, trả 409 STATION_NOT_ELIGIBLE với lý do tương ứng.
 
@@ -558,3 +560,4 @@ Bằng chứng chạy thử các câu SQL trên PostgreSQL: [Reservation_Design_
 | v2.0 draft | 2026-11-23 | Bản nháp đầu: trạng thái phiên/bản nháp/đơn/khóa, giao dịch xác nhận/hủy/hết hạn, ERD v2 (không đổi lược đồ), ma trận phân quyền, cấu hình đề xuất chờ 2.1.1. |
 | v2.1 draft | 2026-11-24 | Đối chiếu 2.1.1 (`840319d`): hạn nháp 5 phút, giữ pin 15 phút, cho phép nhiều đơn `ACTIVE`; thêm bảng đối chiếu §8.1 và ghi chú AE-10a ở bước xác nhận. Sửa lỗi: `lock_timeout` chỉ áp dụng cho advisory lock (trước đây chờ khóa dòng tồn kho quá 5 s sẽ bị báo nhầm `REQUEST_IN_PROGRESS`); worker dùng `pg_try_advisory_xact_lock` thay cho khóa cấp phiên. |
 | v2.2 draft | 2026-11-25 | Theo góp ý review: sửa định dạng 10 sơ đồ Mermaid (§3, §5, §7) bị gộp thành một dòng; ghi đúng trạng thái AE-10a là chưa đáp ứng ở bước xác nhận và nêu hai phương án chờ M1/M7 (§8.4); thêm §8.5 đồng bộ với 2.1.2; kiểm chứng thêm câu cuối AE-10b (đổi thời lượng giữ trong cấu hình). |
+| v2.3 draft | 2026-11-28 | Theo review 2.2.1: D-06 đọc `:now` sau lần chờ khóa cuối cùng thay vì ở đầu giao dịch. Trước đây một yêu cầu đến lúc 08:04:59 và chờ khóa tồn kho qua 08:05:00 vẫn tạo được đơn từ bản nháp đã hết hạn. §6.2 chuyển kiểm tra `DRAFT_EXPIRED` xuống sau bước khóa tồn kho; nhánh gửi lại khóa các dòng liên quan trước khi đối soát hết hạn. |

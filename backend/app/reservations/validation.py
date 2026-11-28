@@ -1,7 +1,7 @@
 """Strict JSON body / header / path validation for reservation endpoints (api_contracts §1.3, §6.2).
 
 Collects every problem before failing (§1.2). `details` order: path, header, body fields
-in the endpoint's table order, then unknown fields. Numbers must be JSON numbers and
+in the endpoint's table order, then unknown body fields, then unknown query parameters. Numbers must be JSON numbers and
 strings JSON strings: nothing is coerced ("1", true, 1.0 are all rejected for quantity).
 """
 
@@ -39,7 +39,26 @@ class _Issues:
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    """A JSON number (not a bool). Integers are exact, so any size counts; floats must be finite."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True  # math.isfinite() would raise OverflowError past ~1.8e308
+    return isinstance(value, float) and math.isfinite(value)
+
+
+def _as_float(value) -> Optional[float]:
+    """The value as a finite float, or None (not a number, or an integer too large for a float).
+
+    Matches §1.2 "finite after parsing": the query string 10**400 also parses to inf.
+    """
+    if not _is_number(value):
+        return None
+    try:
+        result = float(value)
+    except OverflowError:
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _reject_constant(name: str):
@@ -106,22 +125,24 @@ def _check_nearest(issues: _Issues, value) -> Optional[tuple]:
         field = f"nearest.{name}"
         if name not in value:
             issues.add(field, "REQUIRED", f"{field} là bắt buộc.")
-        elif not _is_number(value[name]):
+            continue
+        number = _as_float(value[name])
+        if number is None:
             issues.add(field, "NOT_A_NUMBER", f"{field} phải là số hợp lệ.")
-        elif not low <= value[name] <= high:
+        elif not low <= number <= high:
             issues.add(field, "OUT_OF_RANGE", f"{field} phải nằm trong [{low}, {high}].")
         else:
-            coords[name] = float(value[name]) + 0.0
-    radius = value.get("radius_km")
-    if radius is not None:
-        if not _is_number(radius):
+            coords[name] = number + 0.0
+    # Only an ABSENT radius_km means "no limit" (§4.3); a present one, null included, must be > 0.
+    radius = None
+    if "radius_km" in value:
+        number = _as_float(value["radius_km"])
+        if number is None:
             issues.add("nearest.radius_km", "NOT_A_NUMBER", "nearest.radius_km phải là số hợp lệ.")
-            radius = None
-        elif radius <= 0:
+        elif number <= 0:
             issues.add("nearest.radius_km", "NOT_POSITIVE", "nearest.radius_km phải lớn hơn 0.")
-            radius = None
         else:
-            radius = float(radius)
+            radius = number
     for name in value:
         if name not in NEAREST_FIELDS:
             issues.add(f"nearest.{name}", "UNKNOWN_FIELD", f"Trường nearest.{name} không được hỗ trợ.")
@@ -136,6 +157,13 @@ def _unknown_fields(issues: _Issues, body: dict, allowed: tuple) -> None:
             issues.add(name, "UNKNOWN_FIELD", f"Trường {name} không được hỗ trợ.")
 
 
+def _unknown_params(issues: _Issues, query_names) -> None:
+    """None of the reservation endpoints declares a query parameter (§3.4, §1.2): every one is
+    UNKNOWN_PARAM, so `?owner=USER-B` fails before anything is written. Listed last, once each."""
+    for name in dict.fromkeys(query_names):
+        issues.add(name, "UNKNOWN_PARAM", f"Tham số {name} không được hỗ trợ.")
+
+
 @dataclass(frozen=True)
 class DraftRequest:
     family_code: str
@@ -143,7 +171,7 @@ class DraftRequest:
     nearest: Optional[tuple] = None  # (lat, lng, radius_km | None)
 
 
-def parse_draft_request(body: dict) -> DraftRequest:
+def parse_draft_request(body: dict, query_names=()) -> DraftRequest:
     """POST /api/v1/reservation-drafts (§6.4): exactly one of station_id / nearest."""
     issues = _Issues()
     _check_family(issues, body)
@@ -159,6 +187,7 @@ def parse_draft_request(body: dict) -> DraftRequest:
         else:
             nearest = _check_nearest(issues, body["nearest"])
     _unknown_fields(issues, body, DRAFT_FIELDS)
+    _unknown_params(issues, query_names)
     issues.raise_if_any()
     return DraftRequest(body["family_code"], body.get("station_id"), nearest)
 
@@ -193,7 +222,7 @@ def _check_idempotency_key(issues: _Issues, key: Optional[str]) -> None:
         issues.add("Idempotency-Key", "INVALID_FORMAT", "Idempotency-Key phải khớp ^[A-Za-z0-9_-]{16,100}$.")
 
 
-def parse_confirm_request(idempotency_key: Optional[str], body: dict) -> ConfirmRequest:
+def parse_confirm_request(idempotency_key: Optional[str], body: dict, query_names=()) -> ConfirmRequest:
     """POST /api/v1/reservations (§6.7): header, then the four echoed draft fields."""
     issues = _Issues()
     _check_idempotency_key(issues, idempotency_key)
@@ -205,13 +234,16 @@ def parse_confirm_request(idempotency_key: Optional[str], body: dict) -> Confirm
     _check_family(issues, body)
     _check_quantity(issues, body)
     _unknown_fields(issues, body, CONFIRM_FIELDS)
+    _unknown_params(issues, query_names)
     issues.raise_if_any()
     return ConfirmRequest(idempotency_key, body["draft_id"], body["station_id"], body["family_code"], body["quantity"])
 
 
-def parse_draft_id(draft_id: str) -> str:
+def parse_draft_id(draft_id: str, query_names=()) -> str:
+    """GET /api/v1/reservation-drafts/{draft_id}: path first, then unknown query parameters."""
+    issues = _Issues()
     if not UUID_RE.match(draft_id):
-        raise ApiError.invalid_input(
-            [{"field": "draft_id", "reason": "INVALID_FORMAT", "message": "draft_id phải là UUID chữ thường."}]
-        )
+        issues.add("draft_id", "INVALID_FORMAT", "draft_id phải là UUID chữ thường.")
+    _unknown_params(issues, query_names)
+    issues.raise_if_any()
     return draft_id

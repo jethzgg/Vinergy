@@ -18,10 +18,29 @@ import hmac
 import secrets
 from datetime import datetime
 
+from app.core.config import DEFAULT_SESSION_SECRET
 from app.errors import ApiError
 
 SESSION_COOKIE = "vinergy_sid"
 CSRF_HEADER = "X-CSRF-Token"
+
+
+class SessionSecretError(RuntimeError):
+    """SESSION_SECRET is unusable for protecting sessions (configuration error, not a request error)."""
+
+
+def require_usable_secret(secret: str | None) -> None:
+    """Refuse an empty key or the public sample value from .env.example (Reservation_Design §4.1).
+
+    Anyone who knows the key can compute every CSRF token, so the services that guard
+    sessions must not start without a private one. The value itself is never echoed.
+    """
+    if secret is None or not secret.strip() or secret.strip() == DEFAULT_SESSION_SECRET:
+        raise SessionSecretError(
+            "SESSION_SECRET is empty or still the sample value from .env.example. "
+            "Set a private random value in .env, for example the output of "
+            "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`."
+        )
 
 
 def new_raw_sid() -> str:

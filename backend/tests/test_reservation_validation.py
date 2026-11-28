@@ -220,3 +220,124 @@ def test_settings_defaults_follow_srs_demo_proposal(monkeypatch):
     assert ReservationSettings.from_env().hold_minutes == 20
     with pytest.raises(ValueError):
         ReservationSettings(hold_minutes=0)
+
+
+# --- review fixes: radius_km null, very large integers, query parameters ------------------------
+
+NEAREST = {"lat": 21.0032, "lng": 105.856}
+
+
+def draft_body(**nearest):
+    return {"family_code": "FAM_A", "quantity": 1, "nearest": {**NEAREST, **nearest}}
+
+
+def test_radius_km_null_is_not_the_same_as_absent():
+    """Only an absent radius_km means "no limit" (§4.3, §6.2); null must be rejected."""
+    assert parse_draft_request(draft_body()).nearest == (21.0032, 105.856, None)
+    with pytest.raises(ApiError) as exc:
+        parse_draft_request(draft_body(radius_km=None))
+    assert details(exc) == [("nearest.radius_km", "NOT_A_NUMBER")]
+
+
+@pytest.mark.parametrize("radius, reason", [(0, "NOT_POSITIVE"), (-1, "NOT_POSITIVE"), ("5", "NOT_A_NUMBER"),
+                                            (True, "NOT_A_NUMBER"), (10 ** 400, "NOT_A_NUMBER")],
+                         ids=["zero", "negative", "string", "bool", "huge"])
+def test_radius_km_present_must_be_positive_finite_number(radius, reason):
+    with pytest.raises(ApiError) as exc:
+        parse_draft_request(draft_body(radius_km=radius))
+    assert details(exc) == [("nearest.radius_km", reason)]
+
+
+def test_radius_km_large_but_representable_is_accepted():
+    assert parse_draft_request(draft_body(radius_km=10 ** 300)).nearest[2] == float(10 ** 300)
+
+
+HUGE = 10 ** 400  # a valid JSON integer, too large for a float: math.isfinite() would raise
+
+
+@pytest.mark.parametrize("value", [HUGE, -HUGE], ids=["huge", "minus-huge"])
+def test_huge_integer_quantity_is_a_400_not_a_500(value):
+    for parse in (lambda: parse_draft_request({"family_code": "FAM_A", "quantity": value, "station_id": "ST-01"}),
+                  lambda: parse_confirm_request(KEY, {**CONFIRM, "quantity": value})):
+        with pytest.raises(ApiError) as exc:
+            parse()
+        assert details(exc)[-1] == ("quantity", "MUST_BE_ONE")
+
+
+@pytest.mark.parametrize("field", ["lat", "lng"])
+@pytest.mark.parametrize("value", [HUGE, -HUGE], ids=["huge", "minus-huge"])
+def test_huge_integer_coordinate_is_a_400_not_a_500(field, value):
+    with pytest.raises(ApiError) as exc:
+        parse_draft_request(draft_body(**{field: value}))
+    assert details(exc) == [(f"nearest.{field}", "NOT_A_NUMBER")]
+
+
+def test_integer_coordinate_out_of_range_is_out_of_range():
+    with pytest.raises(ApiError) as exc:
+        parse_draft_request(draft_body(lat=91, lng=10 ** 20))
+    assert details(exc) == [("nearest.lat", "OUT_OF_RANGE"), ("nearest.lng", "OUT_OF_RANGE")]
+
+
+def test_huge_integer_in_raw_json_body_parses_and_is_rejected():
+    body = parse_json_object(b'{"family_code": "FAM_A", "quantity": 1, "nearest": {"lat": 1' + b"0" * 400 + b', "lng": 1}}')
+    with pytest.raises(ApiError) as exc:
+        parse_draft_request(body)
+    assert details(exc) == [("nearest.lat", "NOT_A_NUMBER")]
+
+
+@pytest.mark.parametrize("name", ["owner", "user_id", "demo_user", "radius"])
+def test_every_query_parameter_is_unknown(name):
+    with pytest.raises(ApiError) as e1:
+        parse_draft_request({"family_code": "FAM_A", "quantity": 1, "station_id": "ST-01"}, [name])
+    with pytest.raises(ApiError) as e2:
+        parse_confirm_request(KEY, CONFIRM, [name])
+    with pytest.raises(ApiError) as e3:
+        parse_draft_id(DRAFT_ID, [name])
+    assert details(e1) == details(e2) == details(e3) == [(name, "UNKNOWN_PARAM")]
+
+
+def test_path_error_comes_before_query_error():
+    with pytest.raises(ApiError) as exc:
+        parse_draft_id("not-a-uuid", ["owner", "owner"])
+    assert details(exc) == [("draft_id", "INVALID_FORMAT"), ("owner", "UNKNOWN_PARAM")]
+
+
+# --- review fixes: SESSION_SECRET must be private ------------------------------------------------
+
+@pytest.mark.parametrize("secret", [None, "", "   ", "change-me-local-dev-only", " change-me-local-dev-only "])
+def test_unusable_session_secret_is_refused(secret):
+    with pytest.raises(demo_session.SessionSecretError) as exc:
+        demo_session.require_usable_secret(secret)
+    assert "SESSION_SECRET" in str(exc.value)
+
+
+def test_private_session_secret_is_accepted():
+    demo_session.require_usable_secret("a-private-random-value-0123456789")
+
+
+@pytest.mark.parametrize("secret", ["", "change-me-local-dev-only"])
+def test_reservation_service_refuses_to_start_with_sample_secret(secret):
+    from app.reservations.service import ReservationService
+
+    with pytest.raises(demo_session.SessionSecretError):
+        ReservationService("postgresql://unused/never_connected_test", ReservationSettings(), secret)
+
+
+def test_app_startup_fails_loudly_when_reservations_have_no_private_secret(monkeypatch):
+    """main._reservation_service(): DATABASE_URL set + sample SESSION_SECRET -> configuration error."""
+    from app import main
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused/never_connected_test")
+    monkeypatch.setenv("SESSION_SECRET", "change-me-local-dev-only")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(demo_session.SessionSecretError):
+            main._reservation_service()
+        monkeypatch.setenv("SESSION_SECRET", "a-private-random-value-0123456789")
+        get_settings.cache_clear()
+        assert main._reservation_service() is not None  # constructing does not connect
+        monkeypatch.setenv("DATABASE_URL", "")
+        assert main._reservation_service() is None  # stations still work without PostgreSQL
+    finally:
+        get_settings.cache_clear()

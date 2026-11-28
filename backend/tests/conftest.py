@@ -1,11 +1,18 @@
 """Shared fixtures: seed-backed service (unit) and HTTP client (API)."""
 
-import pytest
-from fastapi.testclient import TestClient
+import os
 
-from app.main import app
-from app.stations.repository import InMemoryStationRepository, sqlite_repository
-from app.stations.service import StationService
+# Tests never use the developer database or its .env SESSION_SECRET: app.main must import
+# without them (load_dotenv does not override an existing variable). PostgreSQL tests
+# build their own services on TEST_DATABASE_URL.
+os.environ["DATABASE_URL"] = ""
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+from app.stations.repository import InMemoryStationRepository, sqlite_repository  # noqa: E402
+from app.stations.service import StationService  # noqa: E402
 
 LOC_01 = (21.005, 105.8435)
 LOC_02 = (21.0285, 105.8542)
